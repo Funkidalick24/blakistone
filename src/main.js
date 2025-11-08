@@ -46,6 +46,13 @@ const createWindow = () => {
     webSecurity: true
   });
 
+  // Maximize the window
+  mainWindow.maximize();
+
+  // Log maximized state
+  console.log('Window created and maximized. Is maximized:', mainWindow.isMaximized());
+  console.log('Window dimensions:', mainWindow.getBounds());
+
   // and load the index.html of the app.
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
 
@@ -54,7 +61,7 @@ const createWindow = () => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        'Content-Security-Policy': ['default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\' https://cdnjs.cloudflare.com https://fonts.googleapis.com; img-src \'self\' data: https:; font-src \'self\' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com;']
+        'Content-Security-Policy': ['default-src \'self\'; script-src \'self\' http://localhost:3000 \'unsafe-inline\' \'unsafe-eval\'; style-src \'self\' \'unsafe-inline\' https://cdnjs.cloudflare.com https://fonts.googleapis.com; img-src \'self\' data: https:; font-src \'self\' data: https://cdnjs.cloudflare.com https://fonts.gstatic.com; connect-src \'self\' http://localhost:3000;']
       }
     });
   });

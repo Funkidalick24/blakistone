@@ -184,6 +184,37 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   initializeSidebarState();
   checkAuthStatus();
+
+  // Log window dimensions and div heights for debugging
+  console.log('Window dimensions:', { width: window.innerWidth, height: window.innerHeight });
+  console.log('Document body height:', document.body.offsetHeight);
+
+  // Log main container heights
+  setTimeout(() => {
+    const appLayout = document.querySelector('.app-layout');
+    const appMain = document.querySelector('.app-main');
+    const dashboard = document.querySelector('.dashboard-grid');
+    const chartContainer = document.querySelector('.chart-container');
+    const statCards = document.querySelectorAll('.stat-card');
+
+    console.log('App layout height:', appLayout ? appLayout.offsetHeight : 'not found');
+    console.log('App main height:', appMain ? appMain.offsetHeight : 'not found');
+    console.log('Dashboard grid height:', dashboard ? dashboard.offsetHeight : 'not found');
+    console.log('Chart container height:', chartContainer ? chartContainer.offsetHeight : 'not found');
+    console.log('Number of stat cards:', statCards.length);
+    statCards.forEach((card, index) => {
+      console.log(`Stat card ${index + 1} height:`, card.offsetHeight);
+    });
+
+    // Log after advanced analytics load
+    setTimeout(() => {
+      const allChartContainers = document.querySelectorAll('.chart-container');
+      console.log('Total chart containers after analytics:', allChartContainers.length);
+      allChartContainers.forEach((container, index) => {
+        console.log(`Chart container ${index + 1} height:`, container.offsetHeight);
+      });
+    }, 100);
+  }, 1000);
 });
 
 // Setup event listeners
@@ -605,10 +636,10 @@ function loadPatientDemographicsChart() {
   `;
   container.appendChild(ctx);
 
-  // Add to dashboard
-  const dashboard = document.querySelector('.dashboard-grid');
-  if (dashboard) {
-    dashboard.appendChild(container);
+  // Add to dashboard after the main chart container
+  const mainChartContainer = document.querySelector('.chart-container');
+  if (mainChartContainer && mainChartContainer.parentNode) {
+    mainChartContainer.parentNode.insertBefore(container, mainChartContainer.nextSibling);
   }
 
   new Chart(ctx, {
@@ -659,10 +690,10 @@ function loadAppointmentTrendsChart() {
   `;
   container.appendChild(ctx);
 
-  // Add to dashboard
-  const dashboard = document.querySelector('.dashboard-grid');
-  if (dashboard) {
-    dashboard.appendChild(container);
+  // Add to dashboard after the main chart container
+  const mainChartContainer = document.querySelector('.chart-container');
+  if (mainChartContainer && mainChartContainer.parentNode) {
+    mainChartContainer.parentNode.insertBefore(container, mainChartContainer.nextSibling);
   }
 
   new Chart(ctx, {
@@ -703,10 +734,10 @@ function loadFinancialAnalyticsChart() {
   `;
   container.appendChild(ctx);
 
-  // Add to dashboard
-  const dashboard = document.querySelector('.dashboard-grid');
-  if (dashboard) {
-    dashboard.appendChild(container);
+  // Add to dashboard after the main chart container
+  const mainChartContainer = document.querySelector('.chart-container');
+  if (mainChartContainer && mainChartContainer.parentNode) {
+    mainChartContainer.parentNode.insertBefore(container, mainChartContainer.nextSibling);
   }
 
   new Chart(ctx, {
