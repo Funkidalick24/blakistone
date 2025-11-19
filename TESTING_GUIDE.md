@@ -3,7 +3,7 @@
 ## Overview
 
 This comprehensive testing guide covers all aspects of testing the Blackistone Medical Centre desktop application. The app is built with Electron and provides a complete clinic management system with patient records, appointments, accounting, and administrative functions.
-
+Npm is a requirement
 ## Prerequisites
 
 ### System Requirements
