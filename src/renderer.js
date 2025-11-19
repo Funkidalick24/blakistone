@@ -247,6 +247,9 @@ function setupEventListeners() {
   // Accounting
   document.getElementById('add-invoice-btn').addEventListener('click', () => openInvoiceModal());
   document.getElementById('add-expense-btn').addEventListener('click', () => openExpenseModal());
+  document.getElementById('add-billing-code-btn').addEventListener('click', () => openBillingCodeModal());
+  document.getElementById('record-payment-btn').addEventListener('click', () => openPaymentModal());
+  document.getElementById('clear-invoices-btn').addEventListener('click', clearAllInvoices);
 
   // Accounting tabs
   document.querySelectorAll('.accounting-tabs .tab-btn').forEach(btn => {
@@ -397,6 +400,12 @@ function switchTab(section, tabName) {
   switch (tabName) {
     case 'invoices':
       loadInvoices();
+      break;
+    case 'billing-codes':
+      loadBillingCodes();
+      break;
+    case 'payments':
+      loadPayments();
       break;
     case 'expenses':
       loadExpenses();
@@ -1358,20 +1367,40 @@ async function loadAppointments() {
   }
 }
 
-function renderAppointmentsTable(appointments) {
+async function renderAppointmentsTable(appointments) {
   const tbody = document.getElementById('appointments-tbody');
   tbody.innerHTML = '';
 
-  appointments.forEach(appointment => {
+  // Get billing information for each appointment
+  const appointmentsWithBilling = await Promise.all(
+    appointments.map(async (appointment) => {
+      try {
+        const billings = await window.electronAPI.getAppointmentBillings(appointment.id);
+        const totalBilled = billings.reduce((sum, billing) => sum + billing.total_price, 0);
+        const hasInvoice = billings.some(billing => billing.invoice_id);
+        return { ...appointment, billings, totalBilled, hasInvoice };
+      } catch (error) {
+        console.error('Error loading billing for appointment:', appointment.id, error);
+        return { ...appointment, billings: [], totalBilled: 0, hasInvoice: false };
+      }
+    })
+  );
+
+  appointmentsWithBilling.forEach(appointment => {
     const row = document.createElement('tr');
+    const billingInfo = appointment.totalBilled > 0 ?
+      `<br><small class="billing-info">Billed: $${appointment.totalBilled.toFixed(2)} ${appointment.hasInvoice ? '(Invoiced)' : ''}</small>` : '';
+
     row.innerHTML = `
-      <td>${new Date(appointment.appointment_date).toLocaleString()}</td>
+      <td>${new Date(appointment.appointment_date).toLocaleString()}${billingInfo}</td>
       <td>${appointment.first_name} ${appointment.last_name}</td>
       <td>${appointment.doctor_name}</td>
       <td>${appointment.appointment_type || ''}</td>
       <td><span class="status-${appointment.status}">${appointment.status}</span></td>
       <td>
         <button class="action-btn edit" onclick="editAppointment(${appointment.id})">Edit</button>
+        ${appointment.status === 'completed' && appointment.totalBilled > 0 && !appointment.hasInvoice ?
+          `<button class="action-btn primary" onclick="createInvoiceFromAppointment(${appointment.id})">Create Invoice</button>` : ''}
         ${currentUser.role === 'admin' ? `<button class="action-btn delete" onclick="deleteAppointment(${appointment.id})">Delete</button>` : ''}
       </td>
     `;
@@ -1379,9 +1408,258 @@ function renderAppointmentsTable(appointments) {
   });
 }
 
-function openAppointmentModal() {
-  // Implementation for appointment modal
-  showError('Appointment modal not implemented yet');
+async function loadPatientsForAppointment() {
+  try {
+    const patients = await window.electronAPI.getPatients();
+    const select = document.getElementById('appointment-patient');
+
+    patients.forEach(patient => {
+      const option = document.createElement('option');
+      option.value = patient.id;
+      option.textContent = `${patient.patient_id} - ${patient.first_name} ${patient.last_name}`;
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading patients for appointment:', error);
+  }
+}
+
+async function loadDoctorsForAppointment() {
+  try {
+    const doctors = await window.electronAPI.getUsers({ role: 'doctor' });
+    const select = document.getElementById('appointment-doctor');
+
+    doctors.forEach(doctor => {
+      const option = document.createElement('option');
+      option.value = doctor.id;
+      option.textContent = `${doctor.name}`;
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading doctors for appointment:', error);
+  }
+}
+
+async function loadAppointmentForEdit(appointmentId) {
+  try {
+    const appointments = await window.electronAPI.getAppointments({ id: appointmentId });
+    if (appointments.length > 0) {
+      const appointment = appointments[0];
+
+      document.getElementById('appointment-patient').value = appointment.patient_id;
+      document.getElementById('appointment-doctor').value = appointment.doctor_id;
+      document.getElementById('appointment-date').value = new Date(appointment.appointment_date).toISOString().slice(0, 16);
+      document.getElementById('appointment-type').value = appointment.appointment_type;
+      document.getElementById('appointment-notes').value = appointment.notes || '';
+
+      // Store ID for update
+      document.getElementById('appointment-form').dataset.appointmentId = appointmentId;
+    }
+  } catch (error) {
+    console.error('Error loading appointment for edit:', error);
+  }
+}
+
+async function handleAppointmentSubmit(e, appointmentId) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const appointmentData = {
+    patientId: parseInt(formData.get('patientId')),
+    doctorId: parseInt(formData.get('doctorId')),
+    appointmentDate: formData.get('appointmentDate'),
+    appointmentType: formData.get('appointmentType'),
+    notes: formData.get('notes')
+  };
+
+  try {
+    if (appointmentId) {
+      await window.electronAPI.updateAppointment(appointmentId, appointmentData);
+      showSuccess('Appointment updated successfully');
+    } else {
+      await window.electronAPI.createAppointment(appointmentData);
+      showSuccess('Appointment scheduled successfully');
+    }
+    closeModal('appointment-modal');
+    loadAppointments();
+  } catch (error) {
+    showError('Error saving appointment: ' + error.message);
+  }
+}
+
+async function loadExpenseForEdit(expenseId) {
+  try {
+    const expenses = await window.electronAPI.getExpenses();
+    const expense = expenses.find(e => e.id === expenseId);
+    if (expense) {
+      document.getElementById('expense-description').value = expense.description;
+      document.getElementById('expense-category').value = expense.category;
+      document.getElementById('expense-amount').value = expense.amount;
+      document.getElementById('expense-date').value = expense.expense_date.split('T')[0];
+      document.getElementById('expense-vendor').value = expense.vendor || '';
+      document.getElementById('expense-receipt').value = expense.receipt_path || '';
+      document.getElementById('expense-notes').value = expense.notes || '';
+
+      // Store ID for update
+      document.getElementById('expense-form').dataset.expenseId = expenseId;
+    }
+  } catch (error) {
+    console.error('Error loading expense for edit:', error);
+  }
+}
+
+async function handleExpenseSubmit(e, expenseId) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const expenseData = {
+    description: formData.get('description'),
+    category: formData.get('category'),
+    amount: parseFloat(formData.get('amount')),
+    expenseDate: formData.get('expenseDate'),
+    vendor: formData.get('vendor') || null,
+    receiptPath: formData.get('receiptPath') || null,
+    notes: formData.get('notes') || null
+  };
+
+  try {
+    if (expenseId) {
+      await window.electronAPI.updateExpense(expenseId, expenseData);
+      showSuccess('Expense updated successfully');
+    } else {
+      await window.electronAPI.createExpense(expenseData);
+      showSuccess('Expense added successfully');
+    }
+    closeModal('expense-modal');
+    loadExpenses();
+    loadFinancialReports(); // Refresh financial stats
+  } catch (error) {
+    showError('Error saving expense: ' + error.message);
+  }
+}
+
+async function loadUserForEdit(userId) {
+  try {
+    const users = await window.electronAPI.getUsers();
+    const user = users.find(u => u.id === userId);
+    if (user) {
+      document.getElementById('user-username').value = user.username;
+      document.getElementById('user-name').value = user.name;
+      document.getElementById('user-email').value = user.email || '';
+      document.getElementById('user-phone').value = user.phone || '';
+      document.getElementById('user-role').value = user.role;
+
+      // Store ID for update
+      document.getElementById('user-form').dataset.userId = userId;
+    }
+  } catch (error) {
+    console.error('Error loading user for edit:', error);
+  }
+}
+
+async function handleUserSubmit(e, userId) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const userData = {
+    username: formData.get('username'),
+    name: formData.get('name'),
+    email: formData.get('email') || null,
+    phone: formData.get('phone') || null,
+    role: formData.get('role'),
+    password: formData.get('password') || null
+  };
+
+  try {
+    if (userId) {
+      await window.electronAPI.updateUser(userId, userData);
+      showSuccess('User updated successfully');
+    } else {
+      await window.electronAPI.createUser(userData);
+      showSuccess('User created successfully');
+    }
+    closeModal('user-modal');
+    loadUsers();
+  } catch (error) {
+    showError('Error saving user: ' + error.message);
+  }
+}
+
+function openAppointmentModal(appointmentId = null) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'appointment-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>${appointmentId ? 'Edit' : 'Schedule'} Appointment</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="appointment-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="appointment-patient">Patient *</label>
+            <select id="appointment-patient" name="patientId" required>
+              <option value="">Select Patient</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="appointment-doctor">Doctor *</label>
+            <select id="appointment-doctor" name="doctorId" required>
+              <option value="">Select Doctor</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="appointment-date">Date & Time *</label>
+            <input type="datetime-local" id="appointment-date" name="appointmentDate" required
+                   value="${new Date().toISOString().slice(0, 16)}">
+          </div>
+          <div class="form-group">
+            <label for="appointment-type">Type *</label>
+            <select id="appointment-type" name="appointmentType" required>
+              <option value="">Select Type</option>
+              <option value="consultation">Consultation</option>
+              <option value="follow-up">Follow-up</option>
+              <option value="surgery">Surgery</option>
+              <option value="therapy">Therapy</option>
+              <option value="assessment">Assessment</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="appointment-notes">Notes</label>
+          <textarea id="appointment-notes" name="notes" rows="3" placeholder="Appointment notes"></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('appointment-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">${appointmentId ? 'Update' : 'Schedule'} Appointment</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load patients and doctors
+  loadPatientsForAppointment();
+  loadDoctorsForAppointment();
+
+  // Load data if editing
+  if (appointmentId) {
+    loadAppointmentForEdit(appointmentId);
+  }
+
+  // Add form submit handler
+  modal.querySelector('#appointment-form').addEventListener('submit', (e) => handleAppointmentSubmit(e, appointmentId));
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
 }
 
 // Workflow Automation Functions
@@ -1559,11 +1837,708 @@ async function loadFinancialReports() {
 }
 
 function openInvoiceModal() {
-  showError('Invoice modal not implemented yet');
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'invoice-modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3>Create Invoice</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="invoice-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="invoice-patient">Patient *</label>
+            <select id="invoice-patient" name="patientId" required>
+              <option value="">Select Patient</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="invoice-due-date">Due Date *</label>
+            <input type="date" id="invoice-due-date" name="dueDate" required
+                   value="${new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="invoice-notes">Notes</label>
+          <textarea id="invoice-notes" name="notes" rows="2" placeholder="Invoice notes"></textarea>
+        </div>
+
+        <div class="invoice-items-section">
+          <h4>Invoice Items</h4>
+          <div id="invoice-items">
+            <div class="invoice-item" data-item-id="1">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Billing Code *</label>
+                  <select name="billingCodeId" required>
+                    <option value="">Select Billing Code</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Quantity *</label>
+                  <input type="number" name="quantity" min="1" value="1" required>
+                </div>
+                <div class="form-group">
+                  <label>Unit Price *</label>
+                  <input type="number" name="unitPrice" step="0.01" min="0" required>
+                </div>
+                <div class="form-group">
+                  <label>Total</label>
+                  <input type="number" name="totalPrice" step="0.01" readonly>
+                </div>
+                <div class="form-group">
+                  <button type="button" class="btn btn-danger btn-sm remove-item" style="margin-top: 24px;">Remove</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <button type="button" id="add-invoice-item" class="btn btn-secondary">Add Item</button>
+        </div>
+
+        <div class="invoice-totals">
+          <div class="total-row">
+            <strong>Subtotal: $<span id="invoice-subtotal">0.00</span></strong>
+          </div>
+          <div class="total-row">
+            <strong>Tax (15%): $<span id="invoice-tax">0.00</span></strong>
+          </div>
+          <div class="total-row">
+            <strong>Total: $<span id="invoice-total">0.00</span></strong>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('invoice-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Invoice</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load patients and billing codes
+  loadPatientsForInvoice();
+  loadBillingCodesForInvoice();
+
+  // Add form submit handler
+  modal.querySelector('#invoice-form').addEventListener('submit', handleInvoiceSubmit);
+
+  // Add item management
+  setupInvoiceItemManagement(modal);
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
 }
 
-function openExpenseModal() {
-  showError('Expense modal not implemented yet');
+async function loadPatientsForInvoice() {
+  try {
+    const patients = await window.electronAPI.getPatients();
+    const select = document.getElementById('invoice-patient');
+
+    patients.forEach(patient => {
+      const option = document.createElement('option');
+      option.value = patient.id;
+      option.textContent = `${patient.patient_id} - ${patient.first_name} ${patient.last_name}`;
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading patients for invoice:', error);
+  }
+}
+
+async function loadBillingCodesForInvoice() {
+  try {
+    const billingCodes = await window.electronAPI.getBillingCodes({ active: true });
+    const selects = document.querySelectorAll('#invoice-items select[name="billingCodeId"]');
+
+    selects.forEach(select => {
+      select.innerHTML = '<option value="">Select Billing Code</option>';
+      billingCodes.forEach(code => {
+        const option = document.createElement('option');
+        option.value = code.id;
+        option.textContent = `${code.code} - ${code.description} ($${code.default_price.toFixed(2)})`;
+        option.dataset.price = code.default_price;
+        option.dataset.taxRate = code.tax_rate;
+        select.appendChild(option);
+      });
+    });
+  } catch (error) {
+    console.error('Error loading billing codes for invoice:', error);
+  }
+}
+
+function setupInvoiceItemManagement(modal) {
+  const itemsContainer = modal.querySelector('#invoice-items');
+  const addItemBtn = modal.querySelector('#add-invoice-item');
+
+  addItemBtn.addEventListener('click', () => {
+    const itemCount = itemsContainer.children.length + 1;
+    const itemHtml = `
+      <div class="invoice-item" data-item-id="${itemCount}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Billing Code *</label>
+            <select name="billingCodeId" required>
+              <option value="">Select Billing Code</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Quantity *</label>
+            <input type="number" name="quantity" min="1" value="1" required>
+          </div>
+          <div class="form-group">
+            <label>Unit Price *</label>
+            <input type="number" name="unitPrice" step="0.01" min="0" required>
+          </div>
+          <div class="form-group">
+            <label>Total</label>
+            <input type="number" name="totalPrice" step="0.01" readonly>
+          </div>
+          <div class="form-group">
+            <button type="button" class="btn btn-danger btn-sm remove-item" style="margin-top: 24px;">Remove</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    itemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+
+    // Load billing codes for new item
+    loadBillingCodesForInvoice();
+
+    // Add event listeners for new item
+    const newItem = itemsContainer.lastElementChild;
+    setupItemEventListeners(newItem);
+  });
+
+  // Setup event listeners for existing items
+  itemsContainer.querySelectorAll('.invoice-item').forEach(setupItemEventListeners);
+
+  function setupItemEventListeners(item) {
+    const billingCodeSelect = item.querySelector('select[name="billingCodeId"]');
+    const quantityInput = item.querySelector('input[name="quantity"]');
+    const unitPriceInput = item.querySelector('input[name="unitPrice"]');
+    const totalInput = item.querySelector('input[name="totalPrice"]');
+    const removeBtn = item.querySelector('.remove-item');
+
+    billingCodeSelect.addEventListener('change', (e) => {
+      const selectedOption = e.target.selectedOptions[0];
+      if (selectedOption && selectedOption.dataset.price) {
+        unitPriceInput.value = selectedOption.dataset.price;
+        calculateItemTotal(item);
+      }
+    });
+
+    quantityInput.addEventListener('input', () => calculateItemTotal(item));
+    unitPriceInput.addEventListener('input', () => calculateItemTotal(item));
+
+    removeBtn.addEventListener('click', () => {
+      if (itemsContainer.children.length > 1) {
+        item.remove();
+        calculateInvoiceTotals();
+      } else {
+        showError('Invoice must have at least one item');
+      }
+    });
+  }
+
+  function calculateItemTotal(item) {
+    const quantity = parseFloat(item.querySelector('input[name="quantity"]').value) || 0;
+    const unitPrice = parseFloat(item.querySelector('input[name="unitPrice"]').value) || 0;
+    const total = quantity * unitPrice;
+    item.querySelector('input[name="totalPrice"]').value = total.toFixed(2);
+    calculateInvoiceTotals();
+  }
+}
+
+function calculateInvoiceTotals() {
+  const items = document.querySelectorAll('.invoice-item');
+  let subtotal = 0;
+
+  items.forEach(item => {
+    const total = parseFloat(item.querySelector('input[name="totalPrice"]').value) || 0;
+    subtotal += total;
+  });
+
+  const tax = subtotal * 0.15;
+  const total = subtotal + tax;
+
+  document.getElementById('invoice-subtotal').textContent = subtotal.toFixed(2);
+  document.getElementById('invoice-tax').textContent = tax.toFixed(2);
+  document.getElementById('invoice-total').textContent = total.toFixed(2);
+}
+
+async function handleInvoiceSubmit(e) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const items = [];
+
+  // Collect invoice items
+  document.querySelectorAll('.invoice-item').forEach(item => {
+    const billingCodeSelect = item.querySelector('select[name="billingCodeId"]');
+    const billingCodeId = billingCodeSelect.value;
+    const quantity = parseInt(item.querySelector('input[name="quantity"]').value);
+    const unitPrice = parseFloat(item.querySelector('input[name="unitPrice"]').value);
+    const totalPrice = parseFloat(item.querySelector('input[name="totalPrice"]').value);
+
+    if (billingCodeId && quantity && unitPrice) {
+      const selectedOption = billingCodeSelect.selectedOptions[0];
+      const description = selectedOption ? selectedOption.textContent.split(' - ')[1].split(' (')[0] : 'Service';
+
+      items.push({
+        billingCodeId: parseInt(billingCodeId),
+        description: description,
+        quantity: quantity,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice
+      });
+    }
+  });
+
+  if (items.length === 0) {
+    showError('Invoice must have at least one item');
+    return;
+  }
+
+  const invoiceData = {
+    patientId: parseInt(formData.get('patientId')),
+    amount: parseFloat(document.getElementById('invoice-subtotal').textContent),
+    taxAmount: parseFloat(document.getElementById('invoice-tax').textContent),
+    totalAmount: parseFloat(document.getElementById('invoice-total').textContent),
+    dueDate: formData.get('dueDate'),
+    notes: formData.get('notes'),
+    items: items
+  };
+
+  try {
+    await window.electronAPI.createInvoice(invoiceData);
+    showSuccess('Invoice created successfully');
+    closeModal('invoice-modal');
+    loadInvoices();
+  } catch (error) {
+    showError('Error creating invoice: ' + error.message);
+  }
+}
+
+function openExpenseModal(expenseId = null) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'expense-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>${expenseId ? 'Edit' : 'Add'} Expense</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="expense-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="expense-description">Description *</label>
+            <input type="text" id="expense-description" name="description" required placeholder="Expense description">
+          </div>
+          <div class="form-group">
+            <label for="expense-category">Category *</label>
+            <select id="expense-category" name="category" required>
+              <option value="">Select Category</option>
+              <option value="Office Supplies">Office Supplies</option>
+              <option value="Medical Equipment">Medical Equipment</option>
+              <option value="Utilities">Utilities</option>
+              <option value="Rent">Rent</option>
+              <option value="Insurance">Insurance</option>
+              <option value="Marketing">Marketing</option>
+              <option value="Salaries">Salaries</option>
+              <option value="Training">Training</option>
+              <option value="Maintenance">Maintenance</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="expense-amount">Amount *</label>
+            <input type="number" id="expense-amount" name="amount" step="0.01" min="0" required placeholder="0.00">
+          </div>
+          <div class="form-group">
+            <label for="expense-date">Expense Date *</label>
+            <input type="date" id="expense-date" name="expenseDate" required value="${new Date().toISOString().split('T')[0]}">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="expense-vendor">Vendor</label>
+            <input type="text" id="expense-vendor" name="vendor" placeholder="Vendor name">
+          </div>
+          <div class="form-group">
+            <label for="expense-receipt">Receipt Path</label>
+            <input type="text" id="expense-receipt" name="receiptPath" placeholder="Path to receipt file">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="expense-notes">Notes</label>
+          <textarea id="expense-notes" name="notes" rows="2" placeholder="Additional notes"></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('expense-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">${expenseId ? 'Update' : 'Add'} Expense</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load data if editing
+  if (expenseId) {
+    loadExpenseForEdit(expenseId);
+  }
+
+  // Add form submit handler
+  modal.querySelector('#expense-form').addEventListener('submit', (e) => handleExpenseSubmit(e, expenseId));
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+}
+
+async function loadBillingCodes() {
+  try {
+    const billingCodes = await window.electronAPI.getBillingCodes();
+    renderBillingCodesTable(billingCodes);
+  } catch (error) {
+    console.error('Error loading billing codes:', error);
+  }
+}
+
+function renderBillingCodesTable(billingCodes) {
+  const tbody = document.getElementById('billing-codes-tbody');
+  tbody.innerHTML = '';
+
+  billingCodes.forEach(code => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${code.code}</td>
+      <td>${code.description}</td>
+      <td>${code.category}</td>
+      <td>$${code.default_price.toFixed(2)}</td>
+      <td><span class="status-${code.active ? 'active' : 'inactive'}">${code.active ? 'Active' : 'Inactive'}</span></td>
+      <td>
+        <button class="action-btn edit" onclick="editBillingCode(${code.id})">Edit</button>
+        <button class="action-btn delete" onclick="deleteBillingCode(${code.id})"
+                ${currentUser.role !== 'admin' ? 'style="display: none;"' : ''}>Delete</button>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+async function loadPayments() {
+  try {
+    const payments = await window.electronAPI.getPayments();
+    renderPaymentsTable(payments);
+  } catch (error) {
+    console.error('Error loading payments:', error);
+  }
+}
+
+function renderPaymentsTable(payments) {
+  const tbody = document.getElementById('payments-tbody');
+  tbody.innerHTML = '';
+
+  payments.forEach(payment => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${new Date(payment.payment_date).toLocaleDateString()}</td>
+      <td>${payment.invoice_number}</td>
+      <td>${payment.first_name} ${payment.last_name}</td>
+      <td>$${payment.amount.toFixed(2)}</td>
+      <td>${payment.payment_method}</td>
+      <td>${payment.reference_number || ''}</td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+function openBillingCodeModal(billingCodeId = null) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'billing-code-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>${billingCodeId ? 'Edit' : 'Add'} Billing Code</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="billing-code-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="billing-code">Code *</label>
+            <input type="text" id="billing-code" name="code" required placeholder="e.g., CONSULT">
+          </div>
+          <div class="form-group">
+            <label for="billing-category">Category *</label>
+            <select id="billing-category" name="category" required>
+              <option value="">Select Category</option>
+              <option value="Consultation">Consultation</option>
+              <option value="Diagnostic">Diagnostic</option>
+              <option value="Therapy">Therapy</option>
+              <option value="Emergency">Emergency</option>
+              <option value="Preventive">Preventive</option>
+              <option value="Medication">Medication</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="billing-description">Description *</label>
+          <input type="text" id="billing-description" name="description" required placeholder="Brief description of the service">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="billing-price">Default Price *</label>
+            <input type="number" id="billing-price" name="defaultPrice" step="0.01" min="0" required placeholder="0.00">
+          </div>
+          <div class="form-group">
+            <label for="billing-tax-rate">Tax Rate (%)</label>
+            <input type="number" id="billing-tax-rate" name="taxRate" step="0.01" min="0" max="100" value="15.00" placeholder="15.00">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="billing-active" name="active" checked> Active
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('billing-code-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Billing Code</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load data if editing
+  if (billingCodeId) {
+    loadBillingCodeForEdit(billingCodeId);
+  }
+
+  // Add form submit handler
+  modal.querySelector('#billing-code-form').addEventListener('submit', handleBillingCodeSubmit);
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+}
+
+async function loadBillingCodeForEdit(billingCodeId) {
+  try {
+    const billingCodes = await window.electronAPI.getBillingCodes();
+    const code = billingCodes.find(c => c.id === billingCodeId);
+    if (code) {
+      document.getElementById('billing-code').value = code.code;
+      document.getElementById('billing-description').value = code.description;
+      document.getElementById('billing-category').value = code.category;
+      document.getElementById('billing-price').value = code.default_price;
+      document.getElementById('billing-tax-rate').value = (code.tax_rate * 100).toFixed(2);
+      document.getElementById('billing-active').checked = code.active === 1;
+
+      // Store ID for update
+      document.getElementById('billing-code-form').dataset.billingCodeId = billingCodeId;
+    }
+  } catch (error) {
+    console.error('Error loading billing code:', error);
+  }
+}
+
+async function handleBillingCodeSubmit(e) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const billingCodeData = {
+    code: formData.get('code'),
+    description: formData.get('description'),
+    category: formData.get('category'),
+    defaultPrice: parseFloat(formData.get('defaultPrice')),
+    taxRate: parseFloat(formData.get('taxRate')) / 100,
+    active: formData.has('active')
+  };
+
+  try {
+    const isEdit = e.target.dataset.billingCodeId;
+    if (isEdit) {
+      await window.electronAPI.updateBillingCode(parseInt(isEdit), billingCodeData);
+      showSuccess('Billing code updated successfully');
+    } else {
+      await window.electronAPI.createBillingCode(billingCodeData);
+      showSuccess('Billing code created successfully');
+    }
+    closeModal('billing-code-modal');
+    loadBillingCodes();
+  } catch (error) {
+    showError('Error saving billing code: ' + error.message);
+  }
+}
+
+function openPaymentModal() {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'payment-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Record Payment</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="payment-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="payment-invoice">Invoice *</label>
+            <select id="payment-invoice" name="invoiceId" required>
+              <option value="">Select Invoice</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="payment-amount">Amount *</label>
+            <input type="number" id="payment-amount" name="amount" step="0.01" min="0" required placeholder="0.00">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="payment-date">Payment Date *</label>
+            <input type="date" id="payment-date" name="paymentDate" required value="${new Date().toISOString().split('T')[0]}">
+          </div>
+          <div class="form-group">
+            <label for="payment-method">Payment Method *</label>
+            <select id="payment-method" name="paymentMethod" required>
+              <option value="">Select Method</option>
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="check">Check</option>
+              <option value="insurance">Insurance</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="payment-reference">Reference Number</label>
+          <input type="text" id="payment-reference" name="referenceNumber" placeholder="Check #, Transaction ID, etc.">
+        </div>
+        <div class="form-group">
+          <label for="payment-notes">Notes</label>
+          <textarea id="payment-notes" name="notes" rows="2" placeholder="Additional notes"></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('payment-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Record Payment</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load unpaid/overdue invoices
+  loadInvoicesForPayment();
+
+  // Add form submit handler
+  modal.querySelector('#payment-form').addEventListener('submit', handlePaymentSubmit);
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+}
+
+async function loadInvoicesForPayment() {
+  try {
+    const invoices = await window.electronAPI.getInvoices({ status: ['unpaid', 'overdue', 'partial'] });
+    const select = document.getElementById('payment-invoice');
+
+    invoices.forEach(invoice => {
+      const option = document.createElement('option');
+      option.value = invoice.id;
+      option.textContent = `${invoice.invoice_number} - ${invoice.first_name} ${invoice.last_name} ($${invoice.total_amount.toFixed(2)})`;
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading invoices for payment:', error);
+  }
+}
+
+async function handlePaymentSubmit(e) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const paymentData = {
+    invoiceId: parseInt(formData.get('invoiceId')),
+    amount: parseFloat(formData.get('amount')),
+    paymentDate: formData.get('paymentDate'),
+    paymentMethod: formData.get('paymentMethod'),
+    referenceNumber: formData.get('referenceNumber') || null,
+    notes: formData.get('notes') || null
+  };
+
+  try {
+    await window.electronAPI.recordPayment(paymentData);
+    showSuccess('Payment recorded successfully');
+    closeModal('payment-modal');
+    loadPayments();
+    loadInvoices(); // Refresh invoices to show updated status
+  } catch (error) {
+    showError('Error recording payment: ' + error.message);
+  }
+}
+
+async function createInvoiceFromAppointment(appointmentId) {
+  if (!confirm('Create an invoice for this appointment?')) {
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.generateInvoiceFromAppointment(appointmentId);
+    showSuccess(`Invoice ${result.invoiceNumber} created successfully`);
+    loadAppointments(); // Refresh to show updated billing status
+    loadInvoices(); // Refresh invoices list
+  } catch (error) {
+    showError('Error creating invoice: ' + error.message);
+  }
+}
+
+async function clearAllInvoices() {
+  if (!confirm('Are you sure you want to delete ALL invoices, payments, and related billing data? This action cannot be undone.')) {
+    return;
+  }
+
+  if (!confirm('This will permanently delete all invoice data. Are you absolutely sure?')) {
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.clearInvoices();
+    showSuccess(result.message);
+    loadInvoices(); // Refresh the invoices list
+    loadPayments(); // Refresh payments list
+    loadFinancialReports(); // Refresh financial stats
+  } catch (error) {
+    showError('Error clearing invoices: ' + error.message);
+  }
 }
 
 // Admin functions
@@ -1622,16 +2597,121 @@ function renderAuditTable(logs) {
   });
 }
 
-function openUserModal() {
-  showError('User modal not implemented yet');
+function openUserModal(userId = null) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'user-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>${userId ? 'Edit' : 'Add'} User</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="user-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="user-username">Username *</label>
+            <input type="text" id="user-username" name="username" required placeholder="Username">
+          </div>
+          <div class="form-group">
+            <label for="user-name">Full Name *</label>
+            <input type="text" id="user-name" name="name" required placeholder="Full name">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="user-email">Email</label>
+            <input type="email" id="user-email" name="email" placeholder="user@example.com">
+          </div>
+          <div class="form-group">
+            <label for="user-phone">Phone</label>
+            <input type="tel" id="user-phone" name="phone" placeholder="Phone number">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="user-role">Role *</label>
+            <select id="user-role" name="role" required>
+              <option value="">Select Role</option>
+              <option value="admin">Administrator</option>
+              <option value="doctor">Doctor</option>
+              <option value="receptionist">Receptionist</option>
+              <option value="accountant">Accountant</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="user-password">Password ${userId ? '(leave blank to keep current)' : '*'}</label>
+            <input type="password" id="user-password" name="password" ${userId ? '' : 'required'} placeholder="Password">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('user-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">${userId ? 'Update' : 'Create'} User</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load data if editing
+  if (userId) {
+    loadUserForEdit(userId);
+  }
+
+  // Add form submit handler
+  modal.querySelector('#user-form').addEventListener('submit', (e) => handleUserSubmit(e, userId));
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
 }
 
-function createBackup() {
-  showError('Backup functionality not implemented yet');
+async function createBackup() {
+  try {
+    const result = await window.electronAPI.createBackup();
+    if (result.success) {
+      const fileName = result.path.split(/[/\\]/).pop();
+      showSuccess(`Backup created successfully: ${fileName}`);
+      // Update backup status
+      document.getElementById('backup-status').innerHTML = `
+        <i class="fas fa-check-circle"></i>
+        <span>Last backup: ${new Date().toLocaleString()}</span>
+      `;
+    } else {
+      showError('Failed to create backup');
+    }
+  } catch (error) {
+    showError('Error creating backup: ' + error.message);
+  }
 }
 
-function restoreBackup() {
-  showError('Restore functionality not implemented yet');
+async function restoreBackup() {
+  if (!confirm('Are you sure you want to restore from backup? This will replace all current data.')) {
+    return;
+  }
+
+  if (!confirm('This action cannot be undone. All current data will be lost. Continue?')) {
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.restoreBackup();
+    if (result && result.success) {
+      showSuccess('Database restored successfully. The application will restart.');
+      // Reload the app
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+    } else {
+      showError('Restore cancelled or failed');
+    }
+  } catch (error) {
+    showError('Error restoring backup: ' + error.message);
+  }
 }
 
 // Utility functions
@@ -2447,12 +3527,574 @@ function initializeSidebarState() {
 window.viewPatient = (id) => viewPatientDetails(id);
 window.editPatient = (id) => openPatientModal(id);
 window.deletePatient = (id) => deletePatientRecord(id);
-window.editAppointment = (id) => showError('Edit appointment not implemented yet');
-window.deleteAppointment = (id) => showError('Delete appointment not implemented yet');
-window.viewInvoice = (id) => showError('View invoice not implemented yet');
-window.editInvoice = (id) => showError('Edit invoice not implemented yet');
+window.editAppointment = (id) => openAppointmentModal(id);
+window.deleteAppointment = async (id) => {
+  if (confirm('Are you sure you want to delete this appointment?')) {
+    try {
+      await window.electronAPI.deleteAppointment(id);
+      loadAppointments();
+      showSuccess('Appointment deleted successfully');
+    } catch (error) {
+      showError('Error deleting appointment: ' + error.message);
+    }
+  }
+};
+window.createInvoiceFromAppointment = (id) => createInvoiceFromAppointment(id);
+async function viewInvoice(invoiceId) {
+  try {
+    const invoice = await window.electronAPI.getInvoiceWithDetails(invoiceId);
+    showInvoiceDetailsModal(invoice);
+  } catch (error) {
+    showError('Error loading invoice details: ' + error.message);
+  }
+}
+
+function showInvoiceDetailsModal(invoice) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'invoice-details-modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3>Invoice ${invoice.invoice_number}</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <div class="invoice-details-content" style="padding: 1.5rem;">
+        <div class="invoice-header-info" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 2rem; padding: 1rem; background: var(--bg-secondary); border-radius: 8px;">
+          <div>
+            <h4>Invoice Information</h4>
+            <p><strong>Invoice Number:</strong> ${invoice.invoice_number}</p>
+            <p><strong>Date:</strong> ${new Date(invoice.created_at).toLocaleDateString()}</p>
+            <p><strong>Due Date:</strong> ${new Date(invoice.due_date).toLocaleDateString()}</p>
+            <p><strong>Status:</strong> <span class="status-${invoice.status}">${invoice.status}</span></p>
+          </div>
+          <div>
+            <h4>Patient Information</h4>
+            <p><strong>Name:</strong> ${invoice.first_name} ${invoice.last_name}</p>
+            <p><strong>Patient ID:</strong> ${invoice.patient_id}</p>
+          </div>
+        </div>
+
+        <div class="invoice-items-section">
+          <h4>Invoice Items</h4>
+          <table class="data-table" style="width: 100%;">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Quantity</th>
+                <th>Unit Price</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${invoice.items.map(item => `
+                <tr>
+                  <td>${item.description}</td>
+                  <td>${item.quantity}</td>
+                  <td>$${item.unit_price.toFixed(2)}</td>
+                  <td>$${item.total_price.toFixed(2)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="invoice-totals" style="margin: 2rem 0; text-align: right;">
+          <div class="total-row">
+            <strong>Subtotal: $${invoice.amount.toFixed(2)}</strong>
+          </div>
+          <div class="total-row">
+            <strong>Tax (15%): $${invoice.tax_amount.toFixed(2)}</strong>
+          </div>
+          <div class="total-row">
+            <strong>Total: $${invoice.total_amount.toFixed(2)}</strong>
+          </div>
+        </div>
+
+        ${invoice.payments && invoice.payments.length > 0 ? `
+          <div class="invoice-payments-section">
+            <h4>Payment History</h4>
+            <table class="data-table" style="width: 100%;">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Amount</th>
+                  <th>Method</th>
+                  <th>Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${invoice.payments.map(payment => `
+                  <tr>
+                    <td>${new Date(payment.payment_date).toLocaleDateString()}</td>
+                    <td>$${payment.amount.toFixed(2)}</td>
+                    <td>${payment.payment_method}</td>
+                    <td>${payment.reference_number || ''}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
+
+        ${invoice.notes ? `
+          <div class="invoice-notes" style="margin-top: 2rem;">
+            <h4>Notes</h4>
+            <p>${invoice.notes}</p>
+          </div>
+        ` : ''}
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('invoice-details-modal')">Close</button>
+        <button type="button" class="btn btn-primary" onclick="window.electronAPI.generateInvoicePDF(${invoice.id})">Download PDF</button>
+        <button type="button" class="btn btn-primary" onclick="editInvoice(${invoice.id})">Edit Invoice</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Also handle close button in form actions
+  const closeBtn = modal.querySelector('.form-actions .btn-secondary');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      modal.remove();
+    });
+  }
+}
+
+async function editInvoice(invoiceId) {
+  try {
+    const invoice = await window.electronAPI.getInvoiceWithDetails(invoiceId);
+    openEditInvoiceModal(invoice);
+  } catch (error) {
+    showError('Error loading invoice for editing: ' + error.message);
+  }
+}
+
+function openEditInvoiceModal(invoice) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'edit-invoice-modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3>Edit Invoice ${invoice.invoice_number}</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="edit-invoice-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="edit-invoice-patient">Patient *</label>
+            <select id="edit-invoice-patient" name="patientId" required disabled>
+              <option value="">Select Patient</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="edit-invoice-due-date">Due Date *</label>
+            <input type="date" id="edit-invoice-due-date" name="dueDate" required
+                   value="${invoice.due_date.split('T')[0]}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="edit-invoice-notes">Notes</label>
+          <textarea id="edit-invoice-notes" name="notes" rows="2" placeholder="Invoice notes">${invoice.notes || ''}</textarea>
+        </div>
+
+        <div class="invoice-items-section">
+          <h4>Invoice Items</h4>
+          <div id="edit-invoice-items">
+            <!-- Items will be populated here -->
+          </div>
+          <button type="button" id="edit-add-invoice-item" class="btn btn-secondary">Add Item</button>
+        </div>
+
+        <div class="invoice-totals">
+          <div class="total-row">
+            <strong>Subtotal: $<span id="edit-invoice-subtotal">0.00</span></strong>
+          </div>
+          <div class="total-row">
+            <strong>Tax (15%): $<span id="edit-invoice-tax">0.00</span></strong>
+          </div>
+          <div class="total-row">
+            <strong>Total: $<span id="edit-invoice-total">0.00</span></strong>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('edit-invoice-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Update Invoice</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load patients and billing codes
+  loadPatientsForEditInvoice(invoice);
+  loadBillingCodesForEditInvoice(invoice);
+
+  // Add form submit handler
+  modal.querySelector('#edit-invoice-form').addEventListener('submit', (e) => handleEditInvoiceSubmit(e, invoice.id));
+
+  // Add item management
+  setupEditInvoiceItemManagement(modal, invoice);
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+}
+
+async function loadPatientsForEditInvoice(invoice) {
+  try {
+    const patients = await window.electronAPI.getPatients();
+    const select = document.getElementById('edit-invoice-patient');
+
+    patients.forEach(patient => {
+      const option = document.createElement('option');
+      option.value = patient.id;
+      option.textContent = `${patient.patient_id} - ${patient.first_name} ${patient.last_name}`;
+      if (patient.id === invoice.patient_id) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading patients for edit invoice:', error);
+  }
+}
+
+async function loadBillingCodesForEditInvoice(invoice) {
+  try {
+    const billingCodes = await window.electronAPI.getBillingCodes({ active: true });
+    const selects = document.querySelectorAll('#edit-invoice-items select[name="billingCodeId"]');
+
+    selects.forEach(select => {
+      select.innerHTML = '<option value="">Select Billing Code</option>';
+      billingCodes.forEach(code => {
+        const option = document.createElement('option');
+        option.value = code.id;
+        option.textContent = `${code.code} - ${code.description} ($${code.default_price.toFixed(2)})`;
+        option.dataset.price = code.default_price;
+        option.dataset.taxRate = code.tax_rate;
+        select.appendChild(option);
+      });
+    });
+  } catch (error) {
+    console.error('Error loading billing codes for edit invoice:', error);
+  }
+}
+
+function setupEditInvoiceItemManagement(modal, invoice) {
+  const itemsContainer = modal.querySelector('#edit-invoice-items');
+  const addItemBtn = modal.querySelector('#edit-add-invoice-item');
+
+  // Populate existing items
+  invoice.items.forEach(item => {
+    const itemHtml = `
+      <div class="invoice-item" data-item-id="${item.id || Date.now()}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Billing Code *</label>
+            <select name="billingCodeId" required>
+              <option value="">Select Billing Code</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Quantity *</label>
+            <input type="number" name="quantity" min="1" value="${item.quantity}" required>
+          </div>
+          <div class="form-group">
+            <label>Unit Price *</label>
+            <input type="number" name="unitPrice" step="0.01" min="0" value="${item.unit_price}" required>
+          </div>
+          <div class="form-group">
+            <label>Total</label>
+            <input type="number" name="totalPrice" step="0.01" value="${item.total_price}" readonly>
+          </div>
+          <div class="form-group">
+            <button type="button" class="btn btn-danger btn-sm remove-item" style="margin-top: 24px;">Remove</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    itemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+  });
+
+  // Load billing codes and set selected values
+  loadBillingCodesForEditInvoice(invoice).then(() => {
+    invoice.items.forEach((item, index) => {
+      const itemElement = itemsContainer.children[index];
+      if (itemElement) {
+        const select = itemElement.querySelector('select[name="billingCodeId"]');
+        if (select && item.billing_code_id) {
+          select.value = item.billing_code_id;
+        }
+      }
+    });
+  });
+
+  addItemBtn.addEventListener('click', () => {
+    const itemCount = itemsContainer.children.length + 1;
+    const itemHtml = `
+      <div class="invoice-item" data-item-id="${Date.now()}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Billing Code *</label>
+            <select name="billingCodeId" required>
+              <option value="">Select Billing Code</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Quantity *</label>
+            <input type="number" name="quantity" min="1" value="1" required>
+          </div>
+          <div class="form-group">
+            <label>Unit Price *</label>
+            <input type="number" name="unitPrice" step="0.01" min="0" required>
+          </div>
+          <div class="form-group">
+            <label>Total</label>
+            <input type="number" name="totalPrice" step="0.01" readonly>
+          </div>
+          <div class="form-group">
+            <button type="button" class="btn btn-danger btn-sm remove-item" style="margin-top: 24px;">Remove</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    itemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+
+    // Load billing codes for new item
+    loadBillingCodesForEditInvoice(invoice);
+
+    // Add event listeners for new item
+    const newItem = itemsContainer.lastElementChild;
+    setupEditItemEventListeners(newItem);
+  });
+
+  // Setup event listeners for existing items
+  itemsContainer.querySelectorAll('.invoice-item').forEach(setupEditItemEventListeners);
+
+  function setupEditItemEventListeners(item) {
+    const billingCodeSelect = item.querySelector('select[name="billingCodeId"]');
+    const quantityInput = item.querySelector('input[name="quantity"]');
+    const unitPriceInput = item.querySelector('input[name="unitPrice"]');
+    const totalInput = item.querySelector('input[name="totalPrice"]');
+    const removeBtn = item.querySelector('.remove-item');
+
+    billingCodeSelect.addEventListener('change', (e) => {
+      const selectedOption = e.target.selectedOptions[0];
+      if (selectedOption && selectedOption.dataset.price) {
+        unitPriceInput.value = selectedOption.dataset.price;
+        calculateEditItemTotal(item);
+      }
+    });
+
+    quantityInput.addEventListener('input', () => calculateEditItemTotal(item));
+    unitPriceInput.addEventListener('input', () => calculateEditItemTotal(item));
+
+    removeBtn.addEventListener('click', () => {
+      if (itemsContainer.children.length > 1) {
+        item.remove();
+        calculateEditInvoiceTotals();
+      } else {
+        showError('Invoice must have at least one item');
+      }
+    });
+  }
+
+  function calculateEditItemTotal(item) {
+    const quantity = parseFloat(item.querySelector('input[name="quantity"]').value) || 0;
+    const unitPrice = parseFloat(item.querySelector('input[name="unitPrice"]').value) || 0;
+    const total = quantity * unitPrice;
+    item.querySelector('input[name="totalPrice"]').value = total.toFixed(2);
+    calculateEditInvoiceTotals();
+  }
+
+  // Calculate initial totals
+  calculateEditInvoiceTotals();
+}
+
+function calculateEditInvoiceTotals() {
+  const items = document.querySelectorAll('#edit-invoice-items .invoice-item');
+  let subtotal = 0;
+
+  items.forEach(item => {
+    const total = parseFloat(item.querySelector('input[name="totalPrice"]').value) || 0;
+    subtotal += total;
+  });
+
+  const tax = subtotal * 0.15;
+  const total = subtotal + tax;
+
+  document.getElementById('edit-invoice-subtotal').textContent = subtotal.toFixed(2);
+  document.getElementById('edit-invoice-tax').textContent = tax.toFixed(2);
+  document.getElementById('edit-invoice-total').textContent = total.toFixed(2);
+}
+
+async function handleEditInvoiceSubmit(e, invoiceId) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const items = [];
+
+  // Collect invoice items
+  document.querySelectorAll('#edit-invoice-items .invoice-item').forEach(item => {
+    const billingCodeSelect = item.querySelector('select[name="billingCodeId"]');
+    const billingCodeId = billingCodeSelect.value;
+    const quantity = parseInt(item.querySelector('input[name="quantity"]').value);
+    const unitPrice = parseFloat(item.querySelector('input[name="unitPrice"]').value);
+    const totalPrice = parseFloat(item.querySelector('input[name="totalPrice"]').value);
+
+    if (billingCodeId && quantity && unitPrice) {
+      const selectedOption = billingCodeSelect.selectedOptions[0];
+      const description = selectedOption ? selectedOption.textContent.split(' - ')[1].split(' (')[0] : 'Service';
+
+      items.push({
+        billingCodeId: parseInt(billingCodeId),
+        description: description,
+        quantity: quantity,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice
+      });
+    }
+  });
+
+  if (items.length === 0) {
+    showError('Invoice must have at least one item');
+    return;
+  }
+
+  const invoiceData = {
+    patientId: parseInt(formData.get('patientId')),
+    amount: parseFloat(document.getElementById('edit-invoice-subtotal').textContent),
+    taxAmount: parseFloat(document.getElementById('edit-invoice-tax').textContent),
+    totalAmount: parseFloat(document.getElementById('edit-invoice-total').textContent),
+    dueDate: formData.get('dueDate'),
+    notes: formData.get('notes'),
+    items: items
+  };
+
+  try {
+    await window.electronAPI.updateInvoice(invoiceId, invoiceData);
+    showSuccess('Invoice updated successfully');
+    closeModal('edit-invoice-modal');
+    loadInvoices();
+  } catch (error) {
+    showError('Error updating invoice: ' + error.message);
+  }
+}
+
+window.viewInvoice = (id) => viewInvoice(id);
+window.editInvoice = (id) => editInvoice(id);
+window.editBillingCode = (id) => openBillingCodeModal(id);
+window.deleteBillingCode = (id) => showError('Delete billing code not implemented yet');
 window.editExpense = (id) => showError('Edit expense not implemented yet');
 window.deleteExpense = (id) => showError('Delete expense not implemented yet');
 window.editUser = (id) => showError('Edit user not implemented yet');
 window.deleteUser = (id) => showError('Delete user not implemented yet');
 window.removeFilter = (key) => removeFilter(key);
+
+// Sync settings functions
+async function loadSyncSettings() {
+  try {
+    const credentials = await window.electronAPI.invoke('sync:loadCredentials');
+    if (credentials) {
+      document.getElementById('db-host').value = credentials.host || '';
+      document.getElementById('db-port').value = credentials.port || '5432';
+      document.getElementById('db-name').value = credentials.database || '';
+      document.getElementById('db-user').value = credentials.user || '';
+      document.getElementById('ssl-enabled').checked = credentials.ssl !== false;
+    }
+  } catch (error) {
+    console.error('Failed to load sync settings:', error);
+  }
+}
+
+async function saveSyncSettings(credentials) {
+  try {
+    await window.electronAPI.invoke('sync:saveCredentials', credentials);
+    showSuccess('Sync settings saved successfully!');
+  } catch (error) {
+    showError('Failed to save settings: ' + error.message);
+  }
+}
+
+async function testConnection(credentials) {
+  try {
+    const result = await window.electronAPI.invoke('sync:testConnection', credentials);
+    if (result.success) {
+      showSuccess('Connection successful!');
+    } else {
+      showError('Connection failed: ' + result.error);
+    }
+  } catch (error) {
+    showError('Test failed: ' + error.message);
+  }
+}
+
+// Initialize sync settings when admin tab is activated
+document.addEventListener('DOMContentLoaded', () => {
+  // ... existing code ...
+
+  // Add sync settings event listeners
+  const syncForm = document.getElementById('sync-form');
+  if (syncForm) {
+    syncForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const credentials = {
+        host: document.getElementById('db-host').value,
+        port: parseInt(document.getElementById('db-port').value),
+        database: document.getElementById('db-name').value,
+        user: document.getElementById('db-user').value,
+        password: document.getElementById('db-password').value,
+        ssl: document.getElementById('ssl-enabled').checked
+      };
+
+      await saveSyncSettings(credentials);
+    });
+
+    const testBtn = document.getElementById('test-connection');
+    if (testBtn) {
+      testBtn.addEventListener('click', async () => {
+        const credentials = {
+          host: document.getElementById('db-host').value,
+          port: parseInt(document.getElementById('db-port').value),
+          database: document.getElementById('db-name').value,
+          user: document.getElementById('db-user').value,
+          password: document.getElementById('db-password').value,
+          ssl: document.getElementById('ssl-enabled').checked
+        };
+
+        await testConnection(credentials);
+      });
+    }
+  }
+
+  // Load sync settings when admin screen is shown
+  const adminTabObserver = new MutationObserver(() => {
+    if (document.getElementById('admin-screen').classList.contains('active') &&
+        document.getElementById('sync-tab').classList.contains('active')) {
+      loadSyncSettings();
+    }
+  });
+
+  adminTabObserver.observe(document.getElementById('admin-screen'), {
+    attributes: true,
+    attributeFilter: ['class']
+  });
+});

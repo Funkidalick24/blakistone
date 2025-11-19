@@ -132,11 +132,78 @@ class AppointmentService {
           if (err) {
             reject(err);
           } else {
+            // If appointment status changed to completed, create default billing
+            if (appointmentData.status === 'completed' && oldAppointment.status !== 'completed') {
+              createDefaultBillingForAppointment(id, userId);
+            }
+
             // Log update
             Auth.logAudit(userId, 'UPDATE_APPOINTMENT', 'appointments', id, oldAppointment, appointmentData);
             resolve(this.changes);
           }
         });
+      });
+    });
+  }
+
+  // Helper function to create default billing when appointment is completed
+  static createDefaultBillingForAppointment(appointmentId, userId) {
+    // Get appointment details
+    db.get(`
+      SELECT a.*, u.name as doctor_name
+      FROM appointments a
+      JOIN users u ON a.doctor_id = u.id
+      WHERE a.id = ?
+    `, [appointmentId], (err, appointment) => {
+      if (err || !appointment) {
+        console.error('Error getting appointment for billing:', err);
+        return;
+      }
+
+      // Determine default billing code based on appointment type
+      let defaultCode;
+      switch (appointment.appointment_type) {
+        case 'consultation':
+          defaultCode = 'CONSULT';
+          break;
+        case 'follow-up':
+          defaultCode = 'FOLLOWUP';
+          break;
+        case 'surgery':
+          defaultCode = 'SURGERY_CONSULT';
+          break;
+        case 'therapy':
+          defaultCode = 'PHYSIO';
+          break;
+        case 'assessment':
+          defaultCode = 'CONSULT';
+          break;
+        default:
+          defaultCode = 'CONSULT';
+      }
+
+      // Get billing code details
+      db.get('SELECT * FROM billing_codes WHERE code = ? AND active = 1', [defaultCode], (err, billingCode) => {
+        if (err || !billingCode) {
+          console.error('Error getting billing code:', err);
+          return;
+        }
+
+        // Create appointment billing
+        const billingData = {
+          billingCodeId: billingCode.id,
+          quantity: 1,
+          unitPrice: billingCode.default_price
+        };
+
+        const AccountingService = require('./accountingService');
+        AccountingService.createAppointmentBilling(appointmentId, billingData, userId)
+          .then(() => {
+            console.log(`Default billing created for appointment ${appointmentId}`);
+          })
+          .catch(error => {
+            console.error('Error creating default billing:', error);
+          });
       });
     });
   }
