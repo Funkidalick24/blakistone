@@ -388,11 +388,20 @@
               <button id="add-expense-btn" class="btn btn-secondary">
                 <i class="fas fa-money-bill-wave"></i> Add Expense
               </button>
+              <button id="add-billing-code-btn" class="btn btn-secondary">
+                <i class="fas fa-plus-circle"></i> Add Billing Code
+              </button>
             </div>
           </div>
           <div class="accounting-tabs">
             <button class="tab-btn active" data-tab="invoices">
               <i class="fas fa-file-invoice-dollar"></i> Invoices
+            </button>
+            <button class="tab-btn" data-tab="billing-codes">
+              <i class="fas fa-list-alt"></i> Billing Codes
+            </button>
+            <button class="tab-btn" data-tab="payments">
+              <i class="fas fa-credit-card"></i> Payments
             </button>
             <button class="tab-btn" data-tab="expenses">
               <i class="fas fa-money-bill-wave"></i> Expenses
@@ -402,6 +411,11 @@
             </button>
           </div>
           <div id="invoices-tab" class="tab-content active">
+            <div class="screen-actions">
+              <button id="clear-invoices-btn" class="btn btn-danger">
+                <i class="fas fa-trash"></i> Clear All Invoices
+              </button>
+            </div>
             <div class="data-table">
               <table id="invoices-table">
                 <thead>
@@ -415,6 +429,47 @@
                   </tr>
                 </thead>
                 <tbody id="invoices-tbody">
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div id="billing-codes-tab" class="tab-content">
+            <div class="data-table">
+              <table id="billing-codes-table">
+                <thead>
+                  <tr>
+                    <th><i class="fas fa-tag"></i> Code</th>
+                    <th><i class="fas fa-file-alt"></i> Description</th>
+                    <th><i class="fas fa-folder"></i> Category</th>
+                    <th><i class="fas fa-dollar-sign"></i> Price</th>
+                    <th><i class="fas fa-toggle-on"></i> Active</th>
+                    <th><i class="fas fa-cogs"></i> Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="billing-codes-tbody">
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div id="payments-tab" class="tab-content">
+            <div class="screen-actions">
+              <button id="record-payment-btn" class="btn btn-primary">
+                <i class="fas fa-plus-circle"></i> Record Payment
+              </button>
+            </div>
+            <div class="data-table">
+              <table id="payments-table">
+                <thead>
+                  <tr>
+                    <th><i class="fas fa-calendar"></i> Date</th>
+                    <th><i class="fas fa-hashtag"></i> Invoice #</th>
+                    <th><i class="fas fa-user"></i> Patient</th>
+                    <th><i class="fas fa-dollar-sign"></i> Amount</th>
+                    <th><i class="fas fa-credit-card"></i> Method</th>
+                    <th><i class="fas fa-receipt"></i> Reference</th>
+                  </tr>
+                </thead>
+                <tbody id="payments-tbody">
                 </tbody>
               </table>
             </div>
@@ -471,6 +526,9 @@
             <button class="tab-btn" data-tab="backup">
               <i class="fas fa-database"></i> Backup & Restore
             </button>
+            <button class="tab-btn" data-tab="sync">
+              <i class="fas fa-cloud"></i> Sync Settings
+            </button>
           </div>
           <div id="users-tab" class="tab-content active">
             <div class="screen-actions">
@@ -524,6 +582,57 @@
               <i class="fas fa-info-circle"></i>
               <span>Regular backups ensure your data is safe. Last backup: Never</span>
             </div>
+          </div>
+          <div id="sync-tab" class="tab-content">
+            <div class="sync-info">
+              <h3>Cloud Database Sync Settings</h3>
+              <p>Configure credentials for syncing your local database with a cloud database. This enables offline-first functionality with automatic synchronization when online.</p>
+              <div class="sync-status">
+                <i class="fas fa-info-circle"></i>
+                <span id="sync-status-text">Sync not configured. Set up credentials below to enable cloud synchronization.</span>
+              </div>
+            </div>
+            <form id="sync-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="db-host">Database Host:</label>
+                  <input type="text" id="db-host" placeholder="your-postgres-host.com" required>
+                </div>
+                <div class="form-group">
+                  <label for="db-port">Port:</label>
+                  <input type="number" id="db-port" value="5432" min="1" max="65535" required>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="db-name">Database Name:</label>
+                  <input type="text" id="db-name" placeholder="clinic_db" required>
+                </div>
+                <div class="form-group">
+                  <label for="db-user">Username:</label>
+                  <input type="text" id="db-user" required>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="db-password">Password:</label>
+                  <input type="password" id="db-password" required>
+                </div>
+                <div class="form-group">
+                  <label for="ssl-enabled">
+                    <input type="checkbox" id="ssl-enabled" checked> Enable SSL
+                  </label>
+                </div>
+              </div>
+              <div class="form-actions">
+                <button type="button" id="test-connection" class="btn btn-secondary">
+                  <i class="fas fa-plug"></i> Test Connection
+                </button>
+                <button type="submit" class="btn btn-primary">
+                  <i class="fas fa-save"></i> Save Settings
+                </button>
+              </div>
+            </form>
           </div>
         </div>
         </main>

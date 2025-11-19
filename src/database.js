@@ -204,11 +204,74 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS invoice_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       invoice_id INTEGER NOT NULL,
+      billing_code_id INTEGER,
       description TEXT NOT NULL,
       quantity INTEGER DEFAULT 1,
       unit_price REAL NOT NULL,
       total_price REAL NOT NULL,
+      FOREIGN KEY (invoice_id) REFERENCES invoices (id),
+      FOREIGN KEY (billing_code_id) REFERENCES billing_codes (id)
+    )
+  `);
+
+  // Billing codes table - defines billable services
+  db.run(`
+    CREATE TABLE IF NOT EXISTS billing_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT UNIQUE NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      default_price REAL NOT NULL,
+      tax_rate REAL DEFAULT 0.15,
+      active BOOLEAN DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Appointment billings table - links appointments to billing items
+  db.run(`
+    CREATE TABLE IF NOT EXISTS appointment_billings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      appointment_id INTEGER NOT NULL,
+      billing_code_id INTEGER NOT NULL,
+      quantity INTEGER DEFAULT 1,
+      unit_price REAL NOT NULL,
+      total_price REAL NOT NULL,
+      billed BOOLEAN DEFAULT 0,
+      invoice_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (appointment_id) REFERENCES appointments (id),
+      FOREIGN KEY (billing_code_id) REFERENCES billing_codes (id),
       FOREIGN KEY (invoice_id) REFERENCES invoices (id)
+    )
+  `);
+
+  // Payments table - tracks all payments made
+  db.run(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      invoice_id INTEGER NOT NULL,
+      amount REAL NOT NULL,
+      payment_date DATE NOT NULL,
+      payment_method TEXT CHECK (payment_method IN ('cash', 'card', 'bank_transfer', 'check', 'insurance', 'other')),
+      reference_number TEXT,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (invoice_id) REFERENCES invoices (id)
+    )
+  `);
+
+  // Billing rules table - defines automatic billing triggers
+  db.run(`
+    CREATE TABLE IF NOT EXISTS billing_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trigger_type TEXT CHECK (trigger_type IN ('appointment_completed', 'appointment_scheduled', 'manual')),
+      billing_code_id INTEGER NOT NULL,
+      condition_json TEXT, -- JSON string for complex conditions
+      active BOOLEAN DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (billing_code_id) REFERENCES billing_codes (id)
     )
   `);
 
@@ -256,6 +319,35 @@ db.serialize(() => {
             VALUES ('admin', ?, 'admin', 'System Administrator', 'admin@blackistone.com')
           `, [hash]);
         }
+      });
+    }
+  });
+
+  // Insert default billing codes if not exists
+  db.get("SELECT COUNT(*) as count FROM billing_codes", (err, row) => {
+    if (!err && row.count === 0) {
+      const defaultBillingCodes = [
+        { code: 'CONSULT', description: 'General Consultation', category: 'Consultation', default_price: 150.00 },
+        { code: 'FOLLOWUP', description: 'Follow-up Visit', category: 'Consultation', default_price: 100.00 },
+        { code: 'XRAY', description: 'X-Ray Examination', category: 'Diagnostic', default_price: 200.00 },
+        { code: 'BLOOD_TEST', description: 'Blood Test', category: 'Diagnostic', default_price: 75.00 },
+        { code: 'ULTRASOUND', description: 'Ultrasound', category: 'Diagnostic', default_price: 300.00 },
+        { code: 'PHYSIO', description: 'Physiotherapy Session', category: 'Therapy', default_price: 120.00 },
+        { code: 'SURGERY_CONSULT', description: 'Surgical Consultation', category: 'Consultation', default_price: 250.00 },
+        { code: 'EMERGENCY', description: 'Emergency Visit', category: 'Emergency', default_price: 300.00 },
+        { code: 'VACCINE', description: 'Vaccination', category: 'Preventive', default_price: 50.00 },
+        { code: 'PRESCRIPTION', description: 'Prescription Fee', category: 'Medication', default_price: 25.00 }
+      ];
+
+      defaultBillingCodes.forEach(code => {
+        db.run(`
+          INSERT INTO billing_codes (code, description, category, default_price, tax_rate)
+          VALUES (?, ?, ?, ?, 0.15)
+        `, [code.code, code.description, code.category, code.default_price], (err) => {
+          if (err) {
+            console.error('Error inserting default billing code:', err.message);
+          }
+        });
       });
     }
   });
@@ -365,6 +457,19 @@ db.serialize(() => {
     db.run(sql, (err) => {
       if (err && !err.message.includes('duplicate column name')) {
         console.error('Error adding column:', err.message);
+      }
+    });
+  });
+
+  // Add new columns to invoice_items table
+  const invoiceItemsColumns = [
+    "ALTER TABLE invoice_items ADD COLUMN billing_code_id INTEGER REFERENCES billing_codes (id)"
+  ];
+
+  invoiceItemsColumns.forEach(sql => {
+    db.run(sql, (err) => {
+      if (err && !err.message.includes('duplicate column name')) {
+        console.error('Error adding invoice_items column:', err.message);
       }
     });
   });

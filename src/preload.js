@@ -29,11 +29,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Accounting
   createInvoice: (invoiceData) => ipcRenderer.invoke('accounting:createInvoice', invoiceData),
   getInvoices: (filters) => ipcRenderer.invoke('accounting:getInvoices', filters),
+  getInvoiceWithDetails: (invoiceId) => ipcRenderer.invoke('accounting:getInvoiceWithDetails', invoiceId),
+  updateInvoice: (invoiceId, invoiceData) => ipcRenderer.invoke('accounting:updateInvoice', invoiceId, invoiceData),
   updateInvoicePayment: (id, paymentData) => ipcRenderer.invoke('accounting:updateInvoicePayment', id, paymentData),
   createExpense: (expenseData) => ipcRenderer.invoke('accounting:createExpense', expenseData),
+  updateExpense: (id, expenseData) => ipcRenderer.invoke('accounting:updateExpense', id, expenseData),
   getExpenses: (filters) => ipcRenderer.invoke('accounting:getExpenses', filters),
   getFinancialStats: () => ipcRenderer.invoke('accounting:getFinancialStats'),
   generateInvoicePDF: (invoiceId) => ipcRenderer.invoke('accounting:generateInvoicePDF', invoiceId),
+
+  // Billing Codes
+  createBillingCode: (codeData) => ipcRenderer.invoke('accounting:createBillingCode', codeData),
+  getBillingCodes: (filters) => ipcRenderer.invoke('accounting:getBillingCodes', filters),
+  updateBillingCode: (id, codeData) => ipcRenderer.invoke('accounting:updateBillingCode', id, codeData),
+
+  // Appointment Billing
+  createAppointmentBilling: (appointmentId, billingData) => ipcRenderer.invoke('accounting:createAppointmentBilling', appointmentId, billingData),
+  getAppointmentBillings: (appointmentId) => ipcRenderer.invoke('accounting:getAppointmentBillings', appointmentId),
+  generateInvoiceFromAppointment: (appointmentId) => ipcRenderer.invoke('accounting:generateInvoiceFromAppointment', appointmentId),
+
+  // Payments
+  recordPayment: (paymentData) => ipcRenderer.invoke('accounting:recordPayment', paymentData),
+  getPayments: (filters) => ipcRenderer.invoke('accounting:getPayments', filters),
 
   // Audit
   getAuditLog: (filters) => ipcRenderer.invoke('audit:getLog', filters),
