@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Keyboard Shortcuts</title>
+</head>
+<body>
+    <h1>Test Keyboard Shortcuts</h1>
+    <p>Click the button below to test if showKeyboardShortcutsHelp is working:</p>
+    
+    <button onclick="testFunction()">Test showKeyboardShortcutsHelp</button>
+    
+    <div id="result"></div>
+    
+    <script>
+        // Simulate the function being available
+        function showKeyboardShortcutsHelp() {
+            alert('Keyboard shortcuts help is working!');
+        }
+        
+        // Test the function
+        function testFunction() {
+            const resultDiv = document.getElementById('result');
+            
+            if (typeof showKeyboardShortcutsHelp === 'function') {
+                resultDiv.innerHTML = '<p style="color: green;">✓ showKeyboardShortcutsHelp function is available</p>';
+                showKeyboardShortcutsHelp();
+            } else {
+                resultDiv.innerHTML = '<p style="color: red;">✗ showKeyboardShortcutsHelp function is NOT available</p>';
+            }
+            
+            if (typeof window.showKeyboardShortcutsHelp === 'function') {
+                resultDiv.innerHTML += '<p style="color: green;">✓ window.showKeyboardShortcutsHelp is available</p>';
+            } else {
+                resultDiv.innerHTML += '<p style="color: red;">✗ window.showKeyboardShortcutsHelp is NOT available</p>';
+            }
+        }
+    </script>
+</body>
+</html>

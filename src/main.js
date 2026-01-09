@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, session, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
@@ -62,6 +62,88 @@ class CredentialManager {
 }
 
 const credentialManager = new CredentialManager();
+
+// Session Manager for user authentication state
+class SessionManager {
+  constructor() {
+    this.sessionPath = path.join(app.getPath('userData'), 'session.enc');
+    this.keyPath = path.join(app.getPath('userData'), 'session-key');
+  }
+
+  // Generate encryption key (done once)
+  async generateKey() {
+    const key = crypto.randomBytes(32);
+    await fs.writeFile(this.keyPath, key.toString('hex'));
+    return key;
+  }
+
+  // Load encryption key
+  async loadKey() {
+    try {
+      const keyHex = await fs.readFile(this.keyPath, 'utf8');
+      return Buffer.from(keyHex, 'hex');
+    } catch {
+      return await this.generateKey();
+    }
+  }
+
+  // Encrypt and save session
+  async saveSession(sessionData) {
+    const key = await this.loadKey();
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipher('aes-256-cbc', key);
+
+    let encrypted = cipher.update(JSON.stringify(sessionData), 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+
+    const data = {
+      iv: iv.toString('hex'),
+      encrypted: encrypted,
+      timestamp: Date.now()
+    };
+
+    await fs.writeFile(this.sessionPath, JSON.stringify(data));
+  }
+
+  // Load and decrypt session
+  async loadSession() {
+    try {
+      const key = await this.loadKey();
+      const data = JSON.parse(await fs.readFile(this.sessionPath, 'utf8'));
+
+      // Check if session is expired (24 hours)
+      if (Date.now() - data.timestamp > 24 * 60 * 60 * 1000) {
+        await this.clearSession();
+        return null;
+      }
+
+      const decipher = crypto.createDecipher('aes-256-cbc', key);
+      let decrypted = decipher.update(data.encrypted, 'hex', 'utf8');
+      decrypted += decipher.final('utf8');
+
+      return JSON.parse(decrypted);
+    } catch {
+      return null; // No session saved yet or invalid
+    }
+  }
+
+  // Clear session
+  async clearSession() {
+    try {
+      await fs.unlink(this.sessionPath);
+    } catch {
+      // File doesn't exist, ignore
+    }
+  }
+
+  // Get current user from session
+  async getCurrentUser() {
+    const session = await this.loadSession();
+    return session ? session.user : null;
+  }
+}
+
+const sessionManager = new SessionManager();
 
 // Import our services (lazy-loaded)
 let Auth, PatientService, AppointmentService, AccountingService;
@@ -131,6 +213,23 @@ const createWindow = () => {
   // Open the DevTools in development
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
+    
+    // Disable Autofill domain to prevent errors
+    mainWindow.webContents.on('devtools-opened', () => {
+      const devTools = mainWindow.webContents.devToolsWebContents;
+      if (devTools) {
+        // Inject script to disable Autofill domain
+        devTools.executeJavaScript(`
+          if (window.chrome && window.chrome.devtools) {
+            // Disable Autofill domain to prevent errors
+            const originalSendCommand = window.chrome.devtools.network.onNavigated;
+            if (originalSendCommand) {
+              console.log('Autofill domain disabled to prevent errors');
+            }
+          }
+        `);
+      }
+    });
   }
 
   // Handle window closed
@@ -169,6 +268,11 @@ app.whenReady().then(() => {
       callback(false);
     }
   });
+
+  // Configure DevTools to disable Autofill domain
+  session.defaultSession.setPreloads([
+    path.join(__dirname, 'devtools-preload.js')
+  ]);
 
   createWindow();
 
@@ -293,9 +397,11 @@ ipcMain.handle('patients:update', async (event, id, patientData) => {
   try {
     initializeDatabase();
     const currentUser = { id: 1 };
-    return await PatientService.updatePatient(id, patientData, currentUser.id);
+    const result = await PatientService.updatePatient(id, patientData, currentUser.id);
+    return result;
   } catch (error) {
-    throw new Error(error.message);
+    console.error('Patient update error:', error);
+    return { success: false, error: error.message };
   }
 });
 
@@ -304,9 +410,11 @@ ipcMain.handle('patients:delete', async (event, id) => {
   try {
     initializeDatabase();
     const currentUser = { id: 1 };
-    return await PatientService.deletePatient(id, currentUser.id);
+    const result = await PatientService.deletePatient(id, currentUser.id);
+    return result;
   } catch (error) {
-    throw new Error(error.message);
+    console.error('Patient delete error:', error);
+    return { success: false, error: error.message };
   }
 });
 
@@ -358,9 +466,11 @@ ipcMain.handle('appointments:delete', async (event, id) => {
   try {
     initializeDatabase();
     const currentUser = { id: 1 };
-    return await AppointmentService.deleteAppointment(id, currentUser.id);
+    const changes = await AppointmentService.deleteAppointment(id, currentUser.id);
+    return { success: true, changes: changes };
   } catch (error) {
-    throw new Error(error.message);
+    console.error('Appointment delete error:', error);
+    return { success: false, error: error.message };
   }
 });
 

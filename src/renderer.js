@@ -42,6 +42,17 @@ function clearExpiredCache() {
   }
 }
 
+// Clear patient cache specifically to ensure fresh data
+function clearPatientCache() {
+  // Clear all patient-related cache entries
+  for (const [key] of dataCache) {
+    if (key.startsWith('patients_')) {
+      dataCache.delete(key);
+      cacheExpiry.delete(key);
+    }
+  }
+}
+
 // Lazy loading for images and heavy components
 function lazyLoadImages() {
   const images = document.querySelectorAll('img[data-src]');
@@ -132,13 +143,16 @@ function initializePerformanceMonitoring() {
 }
 
 // Optimized data loading with debouncing and caching
-async function loadPatients(searchTerm = '', filters = {}) {
+async function loadPatients(searchTerm = '', filters = {}, forceRefresh = false) {
   const cacheKey = `patients_${searchTerm}_${JSON.stringify(filters)}`;
-  const cached = getCachedData(cacheKey);
-
-  if (cached) {
-    renderPatientsTable(cached);
-    return;
+  
+  // If forceRefresh is true, bypass cache and fetch fresh data
+  if (!forceRefresh) {
+    const cached = getCachedData(cacheKey);
+    if (cached) {
+      renderPatientsTable(cached);
+      return;
+    }
   }
 
   try {
@@ -150,8 +164,10 @@ async function loadPatients(searchTerm = '', filters = {}) {
 
     const patients = await window.electronAPI.getPatients(searchTerm, undefined, undefined, filters);
 
-    // Cache the results
-    setCachedData(cacheKey, patients);
+    // Only cache if not forcing refresh
+    if (!forceRefresh) {
+      setCachedData(cacheKey, patients);
+    }
 
     renderPatientsTable(patients);
   } catch (error) {
@@ -276,9 +292,30 @@ function setupEventListeners() {
 
   // Patient search and filters
   document.getElementById('patient-search').addEventListener('input', debounce(searchPatients, 300));
-  document.getElementById('patient-gender-filter').addEventListener('change', loadPatients);
-  document.getElementById('patient-smoking-filter').addEventListener('change', loadPatients);
-  document.getElementById('patient-insurance-filter').addEventListener('input', debounce(loadPatients, 300));
+  document.getElementById('patient-gender-filter').addEventListener('change', () => {
+    const filters = {
+      gender: document.getElementById('patient-gender-filter').value,
+      smokingStatus: document.getElementById('patient-smoking-filter').value,
+      insuranceProvider: document.getElementById('patient-insurance-filter').value
+    };
+    loadPatients('', filters, true); // Force refresh for filters
+  });
+  document.getElementById('patient-smoking-filter').addEventListener('change', () => {
+    const filters = {
+      gender: document.getElementById('patient-gender-filter').value,
+      smokingStatus: document.getElementById('patient-smoking-filter').value,
+      insuranceProvider: document.getElementById('patient-insurance-filter').value
+    };
+    loadPatients('', filters, true); // Force refresh for filters
+  });
+  document.getElementById('patient-insurance-filter').addEventListener('input', debounce(() => {
+    const filters = {
+      gender: document.getElementById('patient-gender-filter').value,
+      smokingStatus: document.getElementById('patient-smoking-filter').value,
+      insuranceProvider: document.getElementById('patient-insurance-filter').value
+    };
+    loadPatients('', filters, true); // Force refresh for filters
+  }, 300));
 
   // Modal close
   document.querySelectorAll('.modal-close').forEach(close => {
@@ -368,7 +405,7 @@ function switchScreen(screenName) {
       loadDashboard();
       break;
     case 'patients':
-      loadPatients();
+      loadPatients('', {}, true); // Force refresh when switching to patients screen
       break;
     case 'appointments':
       loadAppointments();
@@ -461,7 +498,6 @@ async function loadDashboard() {
 
     document.getElementById('total-patients').textContent = patientStats.total;
     document.getElementById('today-appointments').textContent = appointmentStats.today;
-    document.getElementById('pending-invoices').textContent = financialStats.pendingRevenue;
     document.getElementById('monthly-revenue').textContent = `$${financialStats.monthlyRevenue.toFixed(2)}`;
 
     // Load revenue chart
@@ -670,6 +706,10 @@ function loadPatientDemographicsChart() {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
+        title: {
+          display: true,
+          text: 'Patient Demographics'
+        },
         legend: {
           position: 'bottom'
         },
@@ -685,7 +725,7 @@ function loadPatientDemographicsChart() {
   });
 }
 
-function loadAppointmentTrendsChart() {
+async function loadAppointmentTrendsChart() {
   const ctx = document.createElement('canvas');
   ctx.id = 'appointment-trends-chart';
   ctx.style.height = '300px';
@@ -705,13 +745,28 @@ function loadAppointmentTrendsChart() {
     mainChartContainer.parentNode.insertBefore(container, mainChartContainer.nextSibling);
   }
 
+  // Get appointment stats
+  const stats = await window.electronAPI.getAppointmentStats();
+  if (!stats.monthlyData || stats.monthlyData.length === 0) {
+    container.innerHTML = `
+      <div class="chart-header">
+        <h3><i class="fas fa-calendar-alt"></i> Appointment Trends</h3>
+      </div>
+      <div class="empty-state">
+        <p>No appointment data available yet.</p>
+        <button onclick="switchScreen('appointments')">Create First Appointment</button>
+      </div>
+    `;
+    return;
+  }
+
   new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: [],
+      labels: stats.monthlyData.map(d => d.month),
       datasets: [{
         label: 'Appointments',
-        data: [],
+        data: stats.monthlyData.map(d => d.count),
         backgroundColor: 'rgba(33, 150, 243, 0.6)',
         borderColor: '#2196F3',
         borderWidth: 1
@@ -720,9 +775,25 @@ function loadAppointmentTrendsChart() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      plugins: {
+        title: {
+          display: true,
+          text: 'Appointment Trends'
+        }
+      },
       scales: {
         y: {
-          beginAtZero: true
+          beginAtZero: true,
+          title: {
+            display: true,
+            text: 'Number of Appointments'
+          }
+        },
+        x: {
+          title: {
+            display: true,
+            text: 'Month'
+          }
         }
       }
     }
@@ -778,11 +849,30 @@ function loadFinancialAnalyticsChart() {
         intersect: false
       },
       plugins: {
+        title: {
+          display: true,
+          text: 'Financial Analytics'
+        },
         tooltip: {
           callbacks: {
             label: function(context) {
               return `${context.dataset.label}: $${context.parsed.y.toLocaleString()}`;
             }
+          }
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: {
+            display: true,
+            text: 'Amount ($)'
+          }
+        },
+        x: {
+          title: {
+            display: true,
+            text: 'Month'
           }
         }
       }
@@ -792,8 +882,8 @@ function loadFinancialAnalyticsChart() {
 
 
 // Alternative function name to avoid conflicts
-async function loadPatientsData(searchTerm = '', filters = {}) {
-  return loadPatients(searchTerm, filters);
+async function loadPatientsData(searchTerm = '', filters = {}, forceRefresh = false) {
+  return loadPatients(searchTerm, filters, forceRefresh);
 }
 
 function renderPatientsTable(patients) {
@@ -806,7 +896,7 @@ function renderPatientsTable(patients) {
     row.innerHTML = `
       <td role="gridcell">
         <input type="checkbox" class="patient-checkbox" data-patient-id="${patient.id}"
-               onchange="updatePatientSelection(${patient.id}, this.checked)"
+               onchange="window.updatePatientSelection(${patient.id}, this.checked)"
                aria-label="Select patient ${patient.first_name} ${patient.last_name}">
       </td>
       <td role="gridcell">${patient.patient_id}</td>
@@ -857,7 +947,7 @@ function updateSelectAllCheckbox() {
 
 function searchPatients() {
   const searchTerm = document.getElementById('patient-search').value;
-  loadPatients(searchTerm);
+  loadPatients(searchTerm, {}, true); // Force refresh for search to ensure latest data
 }
 
 function openPatientModal(patientId = null) {
@@ -1043,14 +1133,24 @@ async function handlePatientSubmit(e) {
     }
 
     if (isEdit) {
-      await window.electronAPI.updatePatient(isEdit, patientData);
-      showSuccess('Patient updated successfully');
+      const result = await window.electronAPI.updatePatient(parseInt(isEdit), patientData);
+      if (result && result.success) {
+        showSuccess('Patient updated successfully');
+        // Clear patient cache to ensure fresh data is loaded
+        clearPatientCache();
+      } else {
+        showError('Error updating patient: ' + (result?.error || 'Unknown error'));
+        return;
+      }
     } else {
       await window.electronAPI.savePatient(patientData);
       showSuccess('Patient created successfully');
+      // Clear patient cache to ensure fresh data is loaded
+      clearPatientCache();
     }
     closeModal('patient-modal');
-    loadPatients();
+    // Force reload patients list to show immediate changes
+    loadPatients('', {}, true);
   } catch (error) {
     console.error('Patient save error:', error);
     showError('Error saving patient: ' + (error.message || 'Unknown error occurred'));
@@ -1339,6 +1439,13 @@ function showPatientDetailsModal(patient) {
       modal.remove();
     });
   }
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 async function deletePatientRecord(patientId) {
@@ -1347,9 +1454,16 @@ async function deletePatientRecord(patientId) {
   }
 
   try {
-    await window.electronAPI.deletePatient(patientId);
-    loadPatients();
-    showSuccess('Patient deleted successfully');
+    const result = await window.electronAPI.deletePatient(parseInt(patientId));
+    if (result && result.success) {
+      // Clear patient cache to ensure fresh data is loaded
+      clearPatientCache();
+      // Force reload patients list to show immediate changes
+      loadPatients('', {}, true);
+      showSuccess('Patient deleted successfully');
+    } else {
+      showError('Error deleting patient: ' + (result?.error || 'Unknown error'));
+    }
   } catch (error) {
     showError('Error deleting patient: ' + error.message);
   }
@@ -1660,6 +1774,13 @@ function openAppointmentModal(appointmentId = null) {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 // Workflow Automation Functions
@@ -1935,6 +2056,13 @@ function openInvoiceModal() {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 async function loadPatientsForInvoice() {
@@ -2209,6 +2337,13 @@ function openExpenseModal(expenseId = null) {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 async function loadBillingCodes() {
@@ -2342,6 +2477,13 @@ function openBillingCodeModal(billingCodeId = null) {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 async function loadBillingCodeForEdit(billingCodeId) {
@@ -2464,6 +2606,13 @@ function openPaymentModal() {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 async function loadInvoicesForPayment() {
@@ -2536,6 +2685,7 @@ async function clearAllInvoices() {
     loadInvoices(); // Refresh the invoices list
     loadPayments(); // Refresh payments list
     loadFinancialReports(); // Refresh financial stats
+    loadDashboard(); // Refresh dashboard to update financial stats display
   } catch (error) {
     showError('Error clearing invoices: ' + error.message);
   }
@@ -2668,6 +2818,13 @@ function openUserModal(userId = null) {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 async function createBackup() {
@@ -2757,93 +2914,517 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl/Cmd key combinations
-  if (e.ctrlKey || e.metaKey) {
-    switch (e.key.toLowerCase()) {
-      case 'n':
-        e.preventDefault();
-        if (currentScreen === 'patients') {
-          openPatientModal();
-        }
-        break;
-      case 'f':
-        e.preventDefault();
-        const searchInput = document.getElementById('patient-search');
-        if (searchInput) {
-          searchInput.focus();
-        }
-        break;
-      case 's':
-        e.preventDefault();
-        // Quick save current form if open
-        const activeForm = document.querySelector('form.active, #patient-form');
-        if (activeForm) {
-          const submitBtn = activeForm.querySelector('button[type="submit"]');
-          if (submitBtn && !submitBtn.disabled) {
-            submitBtn.click();
+  try {
+    // Ctrl/Cmd key combinations
+    if (e.ctrlKey || e.metaKey) {
+      switch (e.key.toLowerCase()) {
+        case 'n':
+          e.preventDefault();
+          handleNewRecordShortcut();
+          break;
+        case 'f':
+          e.preventDefault();
+          focusSearchField();
+          break;
+        case 's':
+          e.preventDefault();
+          saveCurrentForm();
+          break;
+        case 'e':
+          e.preventDefault();
+          handleEditShortcut();
+          break;
+        case 'd':
+          e.preventDefault();
+          handleDeleteShortcut();
+          break;
+        case 'b':
+          e.preventDefault();
+          handleBulkOperationsShortcut();
+          break;
+        case 'p':
+          e.preventDefault();
+          handlePrintShortcut();
+          break;
+        case 'escape':
+          e.preventDefault();
+          // Close modals or go back
+          const activeModal = document.querySelector('.modal.active');
+          if (activeModal) {
+            closeModal(activeModal.id);
           }
-        }
-        break;
-      case 'escape':
-        e.preventDefault();
-        // Close modals or go back
-        const activeModal = document.querySelector('.modal.active');
-        if (activeModal) {
-          closeModal(activeModal.id);
-        }
-        break;
-    }
-  }
-
-  // Alt key combinations
-  if (e.altKey) {
-    switch (e.key.toLowerCase()) {
-      case '1':
-        e.preventDefault();
-        switchScreen('dashboard');
-        break;
-      case '2':
-        e.preventDefault();
-        switchScreen('patients');
-        break;
-      case '3':
-        e.preventDefault();
-        switchScreen('appointments');
-        break;
-      case '4':
-        e.preventDefault();
-        switchScreen('accounting');
-        break;
-      case '5':
-        e.preventDefault();
-        switchScreen('admin');
-        break;
-    }
-  }
-
-  // Function keys
-  switch (e.key) {
-    case 'F1':
-      e.preventDefault();
-      showKeyboardShortcutsHelp();
-      break;
-    case 'F5':
-      e.preventDefault();
-      // Refresh current screen data
-      switch (currentScreen) {
-        case 'dashboard':
-          loadDashboard();
-          break;
-        case 'patients':
-          loadPatients();
-          break;
-        case 'appointments':
-          loadAppointments();
           break;
       }
-      break;
+    }
+
+    // Alt key combinations
+    if (e.altKey) {
+      switch (e.key.toLowerCase()) {
+        case '1':
+          e.preventDefault();
+          switchScreen('dashboard');
+          break;
+        case '2':
+          e.preventDefault();
+          switchScreen('patients');
+          break;
+        case '3':
+          e.preventDefault();
+          switchScreen('appointments');
+          break;
+        case '4':
+          e.preventDefault();
+          switchScreen('accounting');
+          break;
+        case '5':
+          e.preventDefault();
+          switchScreen('admin');
+          break;
+        case 'i':
+          e.preventDefault();
+          handleInvoiceShortcut();
+          break;
+        case 'r':
+          e.preventDefault();
+          handleReportShortcut();
+          break;
+        case 'u':
+          e.preventDefault();
+          handleUserShortcut();
+          break;
+      }
+    }
+
+    // Function keys
+    switch (e.key) {
+      case 'F1':
+        e.preventDefault();
+        showKeyboardShortcutsHelp();
+        break;
+      case 'F2':
+        e.preventDefault();
+        handleRenameShortcut();
+        break;
+      case 'F3':
+        e.preventDefault();
+        handleSearchShortcut();
+        break;
+      case 'F5':
+        e.preventDefault();
+        // Refresh current screen data
+        refreshCurrentScreen();
+        break;
+      case 'F12':
+        e.preventDefault();
+        toggleSidebar();
+        break;
+    }
+
+    // Shift combinations
+    if (e.shiftKey) {
+      switch (e.key.toLowerCase()) {
+        case 'f1':
+          e.preventDefault();
+          showAdvancedHelp();
+          break;
+        case 'f5':
+          e.preventDefault();
+          forceRefresh();
+          break;
+      }
+    }
+  } catch (error) {
+    console.error('Keyboard shortcut error:', error);
+    showWarning('An error occurred while processing keyboard shortcut: ' + error.message);
   }
 });
+
+// Helper functions for keyboard shortcuts
+function handleNewRecordShortcut() {
+  try {
+    if (!currentScreen) {
+      showWarning('No active screen to create record for');
+      return;
+    }
+
+    switch (currentScreen) {
+      case 'patients':
+        openPatientModal();
+        break;
+      case 'appointments':
+        openAppointmentModal();
+        break;
+      case 'accounting':
+        if (document.querySelector('#invoices-tab.active')) {
+          openInvoiceModal();
+        } else if (document.querySelector('#expenses-tab.active')) {
+          openExpenseModal();
+        } else if (document.querySelector('#billing-codes-tab.active')) {
+          openBillingCodeModal();
+        } else if (document.querySelector('#payments-tab.active')) {
+          openPaymentModal();
+        } else {
+          showWarning('Please select a specific tab in Accounting section');
+        }
+        break;
+      case 'admin':
+        if (document.querySelector('#users-tab.active')) {
+          openUserModal();
+        } else {
+          showWarning('Please select Users tab in Admin section');
+        }
+        break;
+      default:
+        showWarning('New record shortcut not available for this screen');
+    }
+  } catch (error) {
+    console.error('Error in handleNewRecordShortcut:', error);
+    showWarning('Failed to create new record: ' + error.message);
+  }
+}
+
+function focusSearchField() {
+  try {
+    let searchInput;
+    
+    switch (currentScreen) {
+      case 'patients':
+        searchInput = document.getElementById('patient-search');
+        break;
+      case 'appointments':
+        searchInput = document.getElementById('appointment-search');
+        break;
+      case 'accounting':
+        searchInput = document.getElementById('invoice-search');
+        break;
+      default:
+        searchInput = document.getElementById('patient-search');
+    }
+    
+    if (searchInput) {
+      searchInput.focus();
+      searchInput.select();
+    } else {
+      showWarning('Search field not found for current screen');
+    }
+  } catch (error) {
+    console.error('Error in focusSearchField:', error);
+    showWarning('Failed to focus search field: ' + error.message);
+  }
+}
+
+function saveCurrentForm() {
+  try {
+    const activeForm = document.querySelector('form.active, #patient-form, #appointment-form, #invoice-form, #expense-form, #billing-code-form, #payment-form, #user-form');
+    if (activeForm) {
+      const submitBtn = activeForm.querySelector('button[type="submit"]');
+      if (submitBtn && !submitBtn.disabled) {
+        submitBtn.click();
+      } else {
+        showWarning('Form is not ready to save or submit button is disabled');
+      }
+    } else {
+      showWarning('No active form found to save');
+    }
+  } catch (error) {
+    console.error('Error in saveCurrentForm:', error);
+    showWarning('Failed to save form: ' + error.message);
+  }
+}
+
+function handleEditShortcut() {
+  const selectedItems = document.querySelectorAll('.patient-checkbox:checked, .appointment-checkbox:checked, .invoice-checkbox:checked');
+  if (selectedItems.length === 1) {
+    const itemId = selectedItems[0].dataset.patientId || selectedItems[0].dataset.appointmentId || selectedItems[0].dataset.invoiceId;
+    if (itemId) {
+      switch (currentScreen) {
+        case 'patients':
+          openPatientModal(itemId);
+          break;
+        case 'appointments':
+          openAppointmentModal(itemId);
+          break;
+        case 'accounting':
+          if (document.querySelector('#invoices-tab.active')) {
+            editInvoice(itemId);
+          } else if (document.querySelector('#expenses-tab.active')) {
+            editExpense(itemId);
+          } else if (document.querySelector('#billing-codes-tab.active')) {
+            editBillingCode(itemId);
+          }
+          break;
+      }
+    }
+  } else if (selectedItems.length > 1) {
+    showWarning('Please select only one item to edit');
+  } else {
+    showWarning('Please select an item to edit');
+  }
+}
+
+function handleDeleteShortcut() {
+  const selectedItems = document.querySelectorAll('.patient-checkbox:checked, .appointment-checkbox:checked, .invoice-checkbox:checked');
+  if (selectedItems.length > 0) {
+    const itemIds = Array.from(selectedItems).map(item => item.dataset.patientId || item.dataset.appointmentId || item.dataset.invoiceId);
+    const itemType = currentScreen === 'patients' ? 'patient' : currentScreen === 'appointments' ? 'appointment' : 'invoice';
+    
+    if (confirm(`Are you sure you want to delete ${selectedItems.length} ${itemType}${selectedItems.length > 1 ? 's' : ''}?`)) {
+      itemIds.forEach(id => {
+        switch (currentScreen) {
+          case 'patients':
+            deletePatientRecord(id);
+            break;
+          case 'appointments':
+            deleteAppointment(id);
+            break;
+          case 'accounting':
+            if (document.querySelector('#invoices-tab.active')) {
+              deleteInvoice(id);
+            } else if (document.querySelector('#expenses-tab.active')) {
+              deleteExpense(id);
+            }
+            break;
+        }
+      });
+    }
+  } else {
+    showWarning('Please select items to delete');
+  }
+}
+
+function handleBulkOperationsShortcut() {
+  if (currentScreen === 'patients') {
+    const selectedCount = document.querySelectorAll('.patient-checkbox:checked').length;
+    if (selectedCount > 0) {
+      // Show bulk operations menu
+      const bulkControls = document.getElementById('bulk-selection-controls');
+      if (bulkControls) {
+        bulkControls.style.display = 'flex';
+      }
+    } else {
+      showWarning('Please select patients for bulk operations');
+    }
+  } else {
+    showWarning('Bulk operations are only available for patients');
+  }
+}
+
+function handlePrintShortcut() {
+  switch (currentScreen) {
+    case 'patients':
+      bulkPrintLabels();
+      break;
+    case 'appointments':
+      printAppointmentSchedule();
+      break;
+    case 'accounting':
+      printFinancialReport();
+      break;
+    default:
+      window.print();
+  }
+}
+
+function handleInvoiceShortcut() {
+  if (currentScreen === 'accounting') {
+    openInvoiceModal();
+  } else {
+    showWarning('Invoice creation is only available in the Accounting section');
+  }
+}
+
+function handleReportShortcut() {
+  if (currentScreen === 'accounting') {
+    switchTab('accounting', 'reports');
+  } else {
+    showWarning('Reports are only available in the Accounting section');
+  }
+}
+
+function handleUserShortcut() {
+  if (currentScreen === 'admin') {
+    openUserModal();
+  } else {
+    showWarning('User management is only available in the Admin section');
+  }
+}
+
+function handleRenameShortcut() {
+  // For renaming selected items
+  const selectedItems = document.querySelectorAll('.patient-checkbox:checked, .appointment-checkbox:checked');
+  if (selectedItems.length === 1) {
+    const itemId = selectedItems[0].dataset.patientId || selectedItems[0].dataset.appointmentId;
+    if (itemId) {
+      switch (currentScreen) {
+        case 'patients':
+          openPatientModal(itemId);
+          break;
+        case 'appointments':
+          openAppointmentModal(itemId);
+          break;
+      }
+    }
+  }
+}
+
+function handleSearchShortcut() {
+  focusSearchField();
+}
+
+function refreshCurrentScreen() {
+  switch (currentScreen) {
+    case 'dashboard':
+      loadDashboard();
+      break;
+    case 'patients':
+      loadPatients('', {}, true); // Force refresh for patients
+      break;
+    case 'appointments':
+      loadAppointments();
+      break;
+    case 'accounting':
+      loadInvoices();
+      break;
+    case 'admin':
+      loadUsers();
+      break;
+  }
+}
+
+function forceRefresh() {
+  // Force reload data and clear cache
+  clearExpiredCache();
+  if (currentScreen === 'patients') {
+    loadPatients('', {}, true); // Force refresh for patients
+  } else {
+    refreshCurrentScreen();
+  }
+}
+
+function showAdvancedHelp() {
+  // Show advanced help modal
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'advanced-help-modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3>Advanced Keyboard Shortcuts</h3>
+        <span class="modal-close">×</span>
+      </div>
+      <div class="help-content" style="padding: 1.5rem;">
+        <div class="help-section">
+          <h4>Navigation Shortcuts</h4>
+          <ul>
+            <li><kbd>Ctrl+Alt+1-5</kbd> - Switch screens with confirmation</li>
+            <li><kbd>Ctrl+Tab</kbd> - Switch between tabs in current screen</li>
+            <li><kbd>Ctrl+Shift+Tab</kbd> - Switch to previous tab</li>
+          </ul>
+        </div>
+        <div class="help-section">
+          <h4>Form Shortcuts</h4>
+          <ul>
+            <li><kbd>Ctrl+Enter</kbd> - Save current form</li>
+            <li><kbd>Ctrl+Shift+S</kbd> - Save and close form</li>
+            <li><kbd>Ctrl+Shift+N</kbd> - Create new record and keep form open</li>
+            <li><kbd>Ctrl+Shift+E</kbd> - Edit selected item</li>
+          </ul>
+        </div>
+        <div class="help-section">
+          <h4>Selection Shortcuts</h4>
+          <ul>
+            <li><kbd>Ctrl+A</kbd> - Select all items</li>
+            <li><kbd>Ctrl+Shift+A</kbd> - Deselect all items</li>
+            <li><kbd>Ctrl+Click</kbd> - Add/remove single item from selection</li>
+            <li><kbd>Shift+Click</kbd> - Select range of items</li>
+          </ul>
+        </div>
+        <div class="help-section">
+          <h4>Search Shortcuts</h4>
+          <ul>
+            <li><kbd>Ctrl+F</kbd> - Focus search field</li>
+            <li><kbd>Ctrl+Shift+F</kbd> - Open advanced search</li>
+            <li><kbd>Ctrl+G</kbd> - Find next search result</li>
+            <li><kbd>Ctrl+Shift+G</kbd> - Find previous search result</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+function showWarning(message) {
+  const warningDiv = document.createElement('div');
+  warningDiv.className = 'message warning';
+  warningDiv.textContent = message;
+  document.querySelector('.app-main').prepend(warningDiv);
+  setTimeout(() => warningDiv.remove(), 3000);
+}
+
+// Additional helper functions for missing features
+function deleteInvoice(id) {
+  if (confirm('Are you sure you want to delete this invoice?')) {
+    window.electronAPI.deleteInvoice(id).then(() => {
+      loadInvoices();
+      showSuccess('Invoice deleted successfully');
+    }).catch(error => {
+      showError('Error deleting invoice: ' + error.message);
+    });
+  }
+}
+
+function printAppointmentSchedule() {
+  const appointments = document.querySelectorAll('.data-table tbody tr');
+  if (appointments.length > 0) {
+    window.print();
+  } else {
+    showWarning('No appointments to print');
+  }
+}
+
+function printFinancialReport() {
+  if (currentScreen === 'accounting') {
+    const reportData = document.querySelector('.financial-reports-content');
+    if (reportData) {
+      window.print();
+    } else {
+      showWarning('No financial data to print');
+    }
+  }
+}
+
+// Test function for keyboard shortcuts (development only)
+function testKeyboardShortcuts() {
+  console.log('Testing keyboard shortcuts...');
+  
+  // Test basic navigation
+  console.log('Testing Alt+1 (Dashboard):');
+  const dashboardEvent = new KeyboardEvent('keydown', { altKey: true, key: '1' });
+  document.dispatchEvent(dashboardEvent);
+  
+  console.log('Testing Alt+2 (Patients):');
+  const patientsEvent = new KeyboardEvent('keydown', { altKey: true, key: '2' });
+  document.dispatchEvent(patientsEvent);
+  
+  console.log('Testing F1 (Help):');
+  const helpEvent = new KeyboardEvent('keydown', { key: 'F1' });
+  document.dispatchEvent(helpEvent);
+  
+  console.log('Keyboard shortcuts test completed. Check console for errors.');
+}
 
 // Guided Tours and Help System
 let currentTourStep = 0;
@@ -2879,9 +3460,11 @@ function showHelpMenu() {
           <h4><i class="fas fa-route"></i> Guided Tours</h4>
           <p>Take an interactive tour to learn about app features:</p>
           <div class="tour-options">
-            <button class="btn btn-primary" onclick="startTour('dashboard')">Dashboard Tour</button>
-            <button class="btn btn-primary" onclick="startTour('patients')">Patient Management Tour</button>
-            <button class="btn btn-primary" onclick="startTour('appointments')">Appointments Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('dashboard')">Dashboard Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('patients')">Patient Management Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('appointments')">Appointments Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('accounting')">Accounting Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('admin')">Admin Tour</button>
           </div>
         </div>
 
@@ -2912,11 +3495,23 @@ function showHelpMenu() {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 function startTour(tourType) {
   // Close help modal
   document.getElementById('help-modal')?.remove();
+
+  // Switch to appropriate screen
+  if (tourType !== 'dashboard') {
+    switchScreen(tourType);
+  }
 
   // Define tour steps based on type
   switch (tourType) {
@@ -2980,6 +3575,86 @@ function startTour(tourType) {
         }
       ];
       break;
+    case 'accounting':
+      tourSteps = [
+        {
+          element: '#accounting-screen',
+          title: 'Accounting Dashboard',
+          content: 'Welcome to the accounting section. Here you can manage invoices, track payments, and monitor your clinic\'s financial health.',
+          position: 'bottom'
+        },
+        {
+          element: '#add-invoice-btn',
+          title: 'Create New Invoices',
+          content: 'Click here to create new invoices for patient services. You can add multiple billing items and calculate taxes automatically.',
+          position: 'bottom'
+        },
+        {
+          element: '#invoices-tab',
+          title: 'Invoice Management',
+          content: 'View and manage all your invoices here. Track payment status, due dates, and outstanding balances.',
+          position: 'top'
+        },
+        {
+          element: '#billing-codes-tab',
+          title: 'Billing Codes',
+          content: 'Manage your billing codes and pricing. These codes are used when creating invoices and determine service pricing.',
+          position: 'top'
+        },
+        {
+          element: '#record-payment-btn',
+          title: 'Record Payments',
+          content: 'Record payments received from patients. You can track different payment methods and reference numbers.',
+          position: 'bottom'
+        },
+        {
+          element: '#reports-tab',
+          title: 'Financial Reports',
+          content: 'View comprehensive financial reports including revenue, expenses, and profit/loss statements.',
+          position: 'top'
+        }
+      ];
+      break;
+    case 'admin':
+      tourSteps = [
+        {
+          element: '#admin-screen',
+          title: 'Administration Panel',
+          content: 'This is the administration section where you can manage users, system settings, and perform maintenance tasks.',
+          position: 'bottom'
+        },
+        {
+          element: '#users-tab',
+          title: 'User Management',
+          content: 'Manage user accounts and permissions. You can add doctors, receptionists, accountants, and other staff members.',
+          position: 'top'
+        },
+        {
+          element: '#add-user-btn',
+          title: 'Add New Users',
+          content: 'Click here to add new users to the system. Set appropriate roles and permissions for each user type.',
+          position: 'bottom'
+        },
+        {
+          element: '#audit-tab',
+          title: 'Audit Log',
+          content: 'View the audit log to track all system activities. This helps with compliance and troubleshooting.',
+          position: 'top'
+        },
+        {
+          element: '#backup-btn',
+          title: 'Data Backup',
+          content: 'Regularly backup your data to prevent loss. You can also restore from previous backups if needed.',
+          position: 'bottom'
+        },
+        {
+          element: '#sync-tab',
+          title: 'Data Synchronization',
+          content: 'Configure settings for synchronizing data with external systems or cloud services.',
+          position: 'top'
+        }
+      ];
+      break;
   }
 
   currentTourStep = 0;
@@ -3024,34 +3699,114 @@ function showTourStep() {
 
   document.body.appendChild(overlay);
 
-  // Position tooltip
-  const tooltip = overlay.querySelector('.tour-tooltip');
-  const rect = element.getBoundingClientRect();
-
-  tooltip.style.position = 'fixed';
-  tooltip.style.zIndex = '10000';
-
-  switch (step.position) {
-    case 'top':
-      tooltip.style.left = rect.left + (rect.width / 2) - (tooltip.offsetWidth / 2) + 'px';
-      tooltip.style.top = rect.top - tooltip.offsetHeight - 10 + 'px';
-      break;
-    case 'bottom':
-      tooltip.style.left = rect.left + (rect.width / 2) - (tooltip.offsetWidth / 2) + 'px';
-      tooltip.style.top = rect.bottom + 10 + 'px';
-      break;
-    case 'left':
-      tooltip.style.left = rect.left - tooltip.offsetWidth - 10 + 'px';
-      tooltip.style.top = rect.top + (rect.height / 2) - (tooltip.offsetHeight / 2) + 'px';
-      break;
-    case 'right':
-      tooltip.style.left = rect.right + 10 + 'px';
-      tooltip.style.top = rect.top + (rect.height / 2) - (tooltip.offsetHeight / 2) + 'px';
-      break;
-  }
+  // Position tooltip after it's rendered
+  requestAnimationFrame(() => {
+    positionTourTooltip(overlay, element, step.position);
+  });
 
   // Highlight target element
   element.classList.add('tour-highlight');
+}
+
+function positionTourTooltip(overlay, element, preferredPosition) {
+  const tooltip = overlay.querySelector('.tour-tooltip');
+  const rect = element.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  
+  // Set initial position to center as fallback
+  let finalLeft = (viewportWidth - 300) / 2; // Default width
+  let finalTop = (viewportHeight - 200) / 2; // Default height
+  let finalPosition = 'center';
+
+  // Define position attempts in order of preference
+  const positionAttempts = [preferredPosition];
+
+  // Add fallback positions
+  switch (preferredPosition) {
+    case 'top':
+      positionAttempts.push('bottom', 'left', 'right', 'center');
+      break;
+    case 'bottom':
+      positionAttempts.push('top', 'left', 'right', 'center');
+      break;
+    case 'left':
+      positionAttempts.push('right', 'top', 'bottom', 'center');
+      break;
+    case 'right':
+      positionAttempts.push('left', 'top', 'bottom', 'center');
+      break;
+    default:
+      positionAttempts.push('top', 'bottom', 'left', 'right');
+      break;
+  }
+
+  // Try each position until one fits
+  for (const position of positionAttempts) {
+    // Force tooltip to be visible to measure its dimensions
+    tooltip.style.visibility = 'hidden';
+    tooltip.style.display = 'block';
+    tooltip.style.position = 'fixed';
+    tooltip.style.left = '0';
+    tooltip.style.top = '0';
+    
+    // Trigger reflow to get accurate dimensions
+    tooltip.offsetHeight;
+    
+    const tooltipRect = tooltip.getBoundingClientRect();
+    tooltip.style.visibility = 'visible';
+
+    let left, top;
+    const margin = 20;
+
+    switch (position) {
+      case 'top':
+        left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+        top = rect.top - tooltipRect.height - 10;
+        break;
+      case 'bottom':
+        left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+        top = rect.bottom + 10;
+        break;
+      case 'left':
+        left = rect.left - tooltipRect.width - 10;
+        top = rect.top + (rect.height / 2) - (tooltipRect.height / 2);
+        break;
+      case 'right':
+        left = rect.right + 10;
+        top = rect.top + (rect.height / 2) - (tooltipRect.height / 2);
+        break;
+      case 'center':
+        left = (viewportWidth - tooltipRect.width) / 2;
+        top = (viewportHeight - tooltipRect.height) / 2;
+        break;
+    }
+
+    // Check if position fits within viewport with some margin
+    const fits = left >= margin &&
+                 top >= margin &&
+                 left + tooltipRect.width <= viewportWidth - margin &&
+                 top + tooltipRect.height <= viewportHeight - margin;
+
+    if (fits) {
+      finalPosition = position;
+      finalLeft = left;
+      finalTop = top;
+      break;
+    }
+  }
+
+  // Apply the position with bounds checking
+  const clampedLeft = Math.max(10, Math.min(finalLeft, viewportWidth - 320));
+  const clampedTop = Math.max(10, Math.min(finalTop, viewportHeight - 220));
+
+  tooltip.style.left = clampedLeft + 'px';
+  tooltip.style.top = clampedTop + 'px';
+  tooltip.style.position = 'fixed';
+  tooltip.style.zIndex = '10000';
+
+  // Update tooltip class for styling
+  tooltip.className = `tour-tooltip ${finalPosition}`;
 }
 
 function nextTourStep() {
@@ -3102,31 +3857,82 @@ function initializeContextualHelp() {
 // Show keyboard shortcuts help
 function showKeyboardShortcutsHelp() {
   const shortcuts = [
-    { keys: 'Ctrl+N', description: 'New Patient (on Patients screen)' },
-    { keys: 'Ctrl+F', description: 'Focus Search' },
-    { keys: 'Ctrl+S', description: 'Save Current Form' },
-    { keys: 'Ctrl+Esc', description: 'Close Modal' },
-    { keys: 'Alt+1-5', description: 'Switch to Dashboard/Patients/Appointments/Accounting/Admin' },
-    { keys: 'F1', description: 'Show This Help' },
-    { keys: 'F5', description: 'Refresh Current Screen' }
+    // Navigation Shortcuts
+    { category: 'Navigation', keys: 'Alt+1-5', description: 'Switch to Dashboard/Patients/Appointments/Accounting/Admin' },
+    { category: 'Navigation', keys: 'F12', description: 'Toggle Sidebar' },
+    { category: 'Navigation', keys: 'Ctrl+Tab', description: 'Switch to next tab' },
+    { category: 'Navigation', keys: 'Ctrl+Shift+Tab', description: 'Switch to previous tab' },
+    
+    // Basic Operations
+    { category: 'Basic Operations', keys: 'Ctrl+N', description: 'Create New Record (context-sensitive)' },
+    { category: 'Basic Operations', keys: 'Ctrl+E', description: 'Edit Selected Item' },
+    { category: 'Basic Operations', keys: 'Ctrl+D', description: 'Delete Selected Item(s)' },
+    { category: 'Basic Operations', keys: 'Ctrl+S', description: 'Save Current Form' },
+    { category: 'Basic Operations', keys: 'Ctrl+Esc', description: 'Close Modal/Dialog' },
+    
+    // Search and Filter
+    { category: 'Search & Filter', keys: 'Ctrl+F', description: 'Focus Search Field' },
+    { category: 'Search & Filter', keys: 'F3', description: 'Quick Search' },
+    { category: 'Search & Filter', keys: 'Ctrl+Shift+F', description: 'Open Advanced Search' },
+    
+    // Screen-Specific Shortcuts
+    { category: 'Patients', keys: 'Ctrl+N', description: 'Add New Patient' },
+    { category: 'Patients', keys: 'Ctrl+B', description: 'Bulk Operations' },
+    { category: 'Patients', keys: 'Ctrl+P', description: 'Print Patient Labels' },
+    
+    { category: 'Appointments', keys: 'Ctrl+N', description: 'Schedule New Appointment' },
+    { category: 'Appointments', keys: 'Ctrl+P', description: 'Print Appointment Schedule' },
+    
+    { category: 'Accounting', keys: 'Ctrl+N', description: 'Create New Invoice' },
+    { category: 'Accounting', keys: 'Alt+I', description: 'Create Invoice' },
+    { category: 'Accounting', keys: 'Alt+R', description: 'View Reports' },
+    { category: 'Accounting', keys: 'Ctrl+P', description: 'Print Financial Report' },
+    
+    { category: 'Admin', keys: 'Ctrl+N', description: 'Add New User' },
+    { category: 'Admin', keys: 'Alt+U', description: 'User Management' },
+    
+    // Advanced Shortcuts
+    { category: 'Advanced', keys: 'F1', description: 'Show Basic Help' },
+    { category: 'Advanced', keys: 'Shift+F1', description: 'Show Advanced Help' },
+    { category: 'Advanced', keys: 'F5', description: 'Refresh Current Screen' },
+    { category: 'Advanced', keys: 'Shift+F5', description: 'Force Refresh (Clear Cache)' },
+    { category: 'Advanced', keys: 'F2', description: 'Rename Selected Item' },
+    
+    // Selection Shortcuts
+    { category: 'Selection', keys: 'Ctrl+A', description: 'Select All Items' },
+    { category: 'Selection', keys: 'Ctrl+Shift+A', description: 'Deselect All Items' },
+    { category: 'Selection', keys: 'Ctrl+Click', description: 'Toggle Single Item Selection' },
+    { category: 'Selection', keys: 'Shift+Click', description: 'Select Range of Items' }
   ];
 
   const modal = document.createElement('div');
   modal.className = 'modal';
   modal.id = 'shortcuts-modal';
   modal.innerHTML = `
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content" style="max-width: 700px;">
       <div class="modal-header">
         <h3>Keyboard Shortcuts</h3>
         <span class="modal-close">&times;</span>
       </div>
       <div class="shortcuts-content" style="padding: 1.5rem;">
-        ${shortcuts.map(shortcut => `
-          <div style="display: flex; justify-content: space-between; margin-bottom: 0.75rem; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary);">
-            <kbd style="background: var(--bg-primary); padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--border-color); font-family: monospace; font-weight: 600;">${shortcut.keys}</kbd>
-            <span style="flex: 1; margin-left: 1rem;">${shortcut.description}</span>
+        ${Object.entries(groupByCategory(shortcuts)).map(([category, categoryShortcuts]) => `
+          <div class="shortcut-category">
+            <h4 style="margin: 1.5rem 0 0.75rem 0; color: var(--text-primary); font-size: 1rem; font-weight: 600; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">${category}</h4>
+            ${categoryShortcuts.map(shortcut => `
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); transition: background-color 0.2s;">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                  <kbd style="background: var(--bg-primary); padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--border-color); font-family: monospace; font-weight: 600; min-width: 80px; text-align: center;">${shortcut.keys}</kbd>
+                  <span style="flex: 1; color: var(--text-primary);">${shortcut.description}</span>
+                </div>
+              </div>
+            `).join('')}
           </div>
         `).join('')}
+      </div>
+      <div class="modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid var(--border-color); background: var(--bg-secondary);">
+        <p style="margin: 0; color: var(--text-secondary); font-size: 0.9rem;">
+          <strong>Note:</strong> Shortcuts are context-sensitive and may only work on specific screens or when certain conditions are met.
+        </p>
       </div>
     </div>
   `;
@@ -3138,6 +3944,25 @@ function showKeyboardShortcutsHelp() {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+// Helper function to group shortcuts by category
+function groupByCategory(shortcuts) {
+  return shortcuts.reduce((groups, shortcut) => {
+    const category = shortcut.category;
+    if (!groups[category]) {
+      groups[category] = [];
+    }
+    groups[category].push(shortcut);
+    return groups;
+  }, {});
 }
 
 function showDocumentation() {
@@ -3525,15 +4350,24 @@ function initializeSidebarState() {
 
 // Global functions for onclick handlers
 window.viewPatient = (id) => viewPatientDetails(id);
+window.switchScreen = switchScreen;
 window.editPatient = (id) => openPatientModal(id);
 window.deletePatient = (id) => deletePatientRecord(id);
 window.editAppointment = (id) => openAppointmentModal(id);
+window.updatePatientSelection = (patientId, selected) => updatePatientSelection(patientId, selected);
 window.deleteAppointment = async (id) => {
   if (confirm('Are you sure you want to delete this appointment?')) {
     try {
-      await window.electronAPI.deleteAppointment(id);
-      loadAppointments();
-      showSuccess('Appointment deleted successfully');
+      const result = await window.electronAPI.deleteAppointment(parseInt(id));
+      if (result && result.success) {
+        // Clear cache to ensure fresh data is loaded
+        clearExpiredCache();
+        // Force reload appointments list to show immediate changes
+        loadAppointments();
+        showSuccess('Appointment deleted successfully');
+      } else {
+        showError('Error deleting appointment: ' + (result?.error || 'Unknown error'));
+      }
     } catch (error) {
       showError('Error deleting appointment: ' + error.message);
     }
@@ -3667,6 +4501,13 @@ function showInvoiceDetailsModal(invoice) {
       modal.remove();
     });
   }
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 async function editInvoice(invoiceId) {
@@ -3752,6 +4593,13 @@ function openEditInvoiceModal(invoice) {
   // Close modal functionality
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
+  });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
   });
 }
 
@@ -4007,6 +4855,10 @@ window.deleteExpense = (id) => showError('Delete expense not implemented yet');
 window.editUser = (id) => showError('Edit user not implemented yet');
 window.deleteUser = (id) => showError('Delete user not implemented yet');
 window.removeFilter = (key) => removeFilter(key);
+window.startTour = startTour;
+window.nextTourStep = nextTourStep;
+window.endTour = endTour;
+window.showKeyboardShortcutsHelp = showKeyboardShortcutsHelp;
 
 // Sync settings functions
 async function loadSyncSettings() {

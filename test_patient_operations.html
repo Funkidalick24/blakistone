@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Patient Operations</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .test-section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        
+        .test-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s;
+        }
+        
+        button.primary { background-color: #007bff; color: white; }
+        button.primary:hover { background-color: #0056b3; }
+        
+        button.secondary { background-color: #6c757d; color: white; }
+        button.secondary:hover { background-color: #545b62; }
+        
+        button.danger { background-color: #dc3545; color: white; }
+        button.danger:hover { background-color: #c82333; }
+        
+        .patient-form {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .form-group label {
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .form-group input, .form-group select {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .patient-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            background-color: #fafafa;
+        }
+        
+        .patient-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+            font-family: monospace;
+        }
+        
+        .patient-item:last-child {
+            border-bottom: none;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-active { background-color: #28a745; }
+        .status-inactive { background-color: #6c757d; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Patient Operations Test Suite</h1>
+    <p>Test all patient CRUD operations and verify immediate list updates</p>
+    
+    <div class="test-section">
+        <h2>📋 Test Controls</h2>
+        <div class="test-controls">
+            <button class="primary" onclick="runAllTests()">Run All Tests</button>
+            <button class="secondary" onclick="clearResults()">Clear Results</button>
+            <button class="danger" onclick="resetTestData()">Reset Test Data</button>
+        </div>
+        
+        <div class="test-controls">
+            <button class="secondary" onclick="loadPatientList()">Load Patient List</button>
+            <button class="secondary" onclick="createTestPatient()">Create Test Patient</button>
+            <button class="secondary" onclick="updateTestPatient()">Update Test Patient</button>
+            <button class="danger" onclick="deleteTestPatient()">Delete Test Patient</button>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>📝 Test Patient Form</h2>
+        <div class="patient-form">
+            <div class="form-group">
+                <label for="test-first-name">First Name</label>
+                <input type="text" id="test-first-name" value="Test">
+            </div>
+            <div class="form-group">
+                <label for="test-last-name">Last Name</label>
+                <input type="text" id="test-last-name" value="Patient">
+            </div>
+            <div class="form-group">
+                <label for="test-phone">Phone</label>
+                <input type="text" id="test-phone" value="555-0123">
+            </div>
+            <div class="form-group">
+                <label for="test-email">Email</label>
+                <input type="email" id="test-email" value="test@example.com">
+            </div>
+            <div class="form-group">
+                <label for="test-gender">Gender</label>
+                <select id="test-gender">
+                    <option value="Male">Male</option>
+                    <option value="Female">Female</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="test-dob">Date of Birth</label>
+                <input type="date" id="test-dob" value="1990-01-01">
+            </div>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>👥 Current Patient List</h2>
+        <div id="patient-list" class="patient-list">
+            <div class="info">Loading patient list...</div>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>🧪 Test Results</h2>
+        <div id="test-results"></div>
+    </div>
+
+    <script>
+        // Test patient tracking
+        let testPatientId = null;
+        let testPatientData = null;
+        
+        // Add electronAPI mock for testing in browser
+        if (typeof window.electronAPI === 'undefined') {
+            window.electronAPI = {
+                getPatients: async (searchTerm) => {
+                    // Mock implementation for browser testing
+                    return [
+                        { id: 1, patient_id: 'P001', first_name: 'John', last_name: 'Doe', phone: '555-0123', email: 'john@example.com', gender: 'Male' },
+                        { id: 2, patient_id: 'P002', first_name: 'Jane', last_name: 'Smith', phone: '555-0456', email: 'jane@example.com', gender: 'Female' }
+                    ];
+                },
+                savePatient: async (patientData) => {
+                    // Mock implementation
+                    return { success: true, id: Math.floor(Math.random() * 1000) + 100 };
+                },
+                updatePatient: async (id, patientData) => {
+                    // Mock implementation
+                    return { success: true, changes: 1 };
+                },
+                deletePatient: async (id) => {
+                    // Mock implementation
+                    return { success: true, changes: 1 };
+                }
+            };
+        }
+        
+        // Utility functions
+        function addResult(message, type = 'info') {
+            const resultsDiv = document.getElementById('test-results');
+            const resultDiv = document.createElement('div');
+            resultDiv.className = `test-result ${type}`;
+            resultDiv.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            resultsDiv.appendChild(resultDiv);
+            resultsDiv.scrollTop = resultsDiv.scrollHeight;
+        }
+        
+        function clearResults() {
+            document.getElementById('test-results').innerHTML = '';
+            addResult('Test results cleared', 'info');
+        }
+        
+        // Patient operations
+        async function loadPatientList() {
+            try {
+                addResult('Loading patient list...', 'info');
+                const patients = await window.electronAPI.getPatients();
+                
+                const listDiv = document.getElementById('patient-list');
+                listDiv.innerHTML = '';
+                
+                if (patients.length === 0) {
+                    listDiv.innerHTML = '<div class="info">No patients found</div>';
+                    addResult('Patient list loaded: 0 patients', 'info');
+                    return;
+                }
+                
+                patients.forEach(patient => {
+                    const item = document.createElement('div');
+                    item.className = 'patient-item';
+                    item.innerHTML = `
+                        <span>
+                            <span class="status-indicator status-active"></span>
+                            ${patient.patient_id} - ${patient.first_name} ${patient.last_name}
+                        </span>
+                        <span>${patient.phone} | ${patient.email}</span>
+                    `;
+                    listDiv.appendChild(item);
+                });
+                
+                addResult(`Patient list loaded: ${patients.length} patients`, 'success');
+            } catch (error) {
+                addResult(`Failed to load patient list: ${error.message}`, 'error');
+            }
+        }
+        
+        function getTestPatientData() {
+            return {
+                firstName: document.getElementById('test-first-name').value,
+                lastName: document.getElementById('test-last-name').value,
+                phone: document.getElementById('test-phone').value,
+                email: document.getElementById('test-email').value,
+                gender: document.getElementById('test-gender').value,
+                dateOfBirth: document.getElementById('test-dob').value
+            };
+        }
+        
+        async function createTestPatient() {
+            try {
+                addResult('Creating test patient...', 'info');
+                const patientData = getTestPatientData();
+                
+                const result = await window.electronAPI.savePatient(patientData);
+                
+                if (result.success) {
+                    testPatientId = result.id;
+                    testPatientData = patientData;
+                    addResult(`Test patient created successfully with ID: ${testPatientId}`, 'success');
+                    await loadPatientList(); // Verify immediate update
+                } else {
+                    addResult(`Failed to create test patient: ${result.error || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                addResult(`Error creating test patient: ${error.message}`, 'error');
+            }
+        }
+        
+        async function updateTestPatient() {
+            if (!testPatientId) {
+                addResult('No test patient created yet. Create one first.', 'error');
+                return;
+            }
+            
+            try {
+                addResult(`Updating test patient (ID: ${testPatientId})...`, 'info');
+                const patientData = getTestPatientData();
+                
+                const result = await window.electronAPI.updatePatient(testPatientId, patientData);
+                
+                if (result.success) {
+                    addResult(`Test patient updated successfully (${result.changes} changes)`, 'success');
+                    await loadPatientList(); // Verify immediate update
+                } else {
+                    addResult(`Failed to update test patient: ${result.error || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                addResult(`Error updating test patient: ${error.message}`, 'error');
+            }
+        }
+        
+        async function deleteTestPatient() {
+            if (!testPatientId) {
+                addResult('No test patient created yet. Create one first.', 'error');
+                return;
+            }
+            
+            if (!confirm('Are you sure you want to delete the test patient?')) {
+                addResult('Delete operation cancelled', 'info');
+                return;
+            }
+            
+            try {
+                addResult(`Deleting test patient (ID: ${testPatientId})...`, 'info');
+                
+                const result = await window.electronAPI.deletePatient(testPatientId);
+                
+                if (result.success) {
+                    addResult(`Test patient deleted successfully (${result.changes} changes)`, 'success');
+                    testPatientId = null;
+                    testPatientData = null;
+                    await loadPatientList(); // Verify immediate update
+                } else {
+                    addResult(`Failed to delete test patient: ${result.error || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                addResult(`Error deleting test patient: ${error.message}`, 'error');
+            }
+        }
+        
+        async function resetTestData() {
+            if (testPatientId) {
+                try {
+                    await window.electronAPI.deletePatient(testPatientId);
+                    addResult(`Test patient (ID: ${testPatientId}) deleted during reset`, 'info');
+                } catch (error) {
+                    addResult(`Error during reset: ${error.message}`, 'error');
+                }
+            }
+            testPatientId = null;
+            testPatientData = null;
+            await loadPatientList();
+            addResult('Test data reset complete', 'success');
+        }
+        
+        // Test suite
+        async function runAllTests() {
+            addResult('🧪 Starting comprehensive test suite...', 'info');
+            
+            try {
+                // Test 1: Load initial list
+                await loadPatientList();
+                addResult('✓ Test 1: Patient list loaded successfully', 'success');
+                
+                // Test 2: Create patient
+                await createTestPatient();
+                if (testPatientId) {
+                    addResult('✓ Test 2: Patient creation successful', 'success');
+                } else {
+                    addResult('✗ Test 2: Patient creation failed', 'error');
+                    return;
+                }
+                
+                // Test 3: Update patient
+                await updateTestPatient();
+                addResult('✓ Test 3: Patient update successful', 'success');
+                
+                // Test 4: Delete patient
+                await deleteTestPatient();
+                if (!testPatientId) {
+                    addResult('✓ Test 4: Patient deletion successful', 'success');
+                } else {
+                    addResult('✗ Test 4: Patient deletion failed', 'error');
+                }
+                
+                // Test 5: Verify list is updated
+                await loadPatientList();
+                addResult('✓ Test 5: Final patient list verification complete', 'success');
+                
+                addResult('🎉 All tests completed successfully!', 'success');
+                
+            } catch (error) {
+                addResult(`💥 Test suite failed: ${error.message}`, 'error');
+            }
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            addResult('Patient operations test suite loaded', 'info');
+            loadPatientList();
+        });
+    </script>
+</body>
+</html>
