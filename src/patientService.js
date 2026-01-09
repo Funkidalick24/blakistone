@@ -211,7 +211,7 @@ class PatientService {
           } else {
             // Log update
             Auth.logAudit(userId, 'UPDATE_PATIENT', 'patients', id, oldPatient, patientData);
-            resolve(this.changes);
+            resolve({ success: true, changes: this.changes });
           }
         });
       });
@@ -227,13 +227,18 @@ class PatientService {
           return;
         }
 
+        if (!patient) {
+          reject(new Error('Patient not found'));
+          return;
+        }
+
         db.run('DELETE FROM patients WHERE id = ?', [id], function(err) {
           if (err) {
             reject(err);
           } else {
             // Log deletion
             Auth.logAudit(userId, 'DELETE_PATIENT', 'patients', id, patient, null);
-            resolve(this.changes);
+            resolve({ success: true, changes: this.changes });
           }
         });
       });

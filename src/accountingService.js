@@ -386,6 +386,7 @@ class AccountingService {
       const queries = [
         'SELECT SUM(total_amount) as totalRevenue FROM invoices WHERE status = \'paid\'',
         'SELECT SUM(total_amount) as pendingRevenue FROM invoices WHERE status = \'unpaid\'',
+        'SELECT COUNT(*) as pendingInvoiceCount FROM invoices WHERE status = \'unpaid\'',
         'SELECT SUM(amount) as totalExpenses FROM expenses',
         'SELECT SUM(amount) as monthlyExpenses FROM expenses WHERE strftime(\'%Y-%m\', expense_date) = strftime(\'%Y-%m\', \'now\')',
         'SELECT SUM(total_amount) as monthlyRevenue FROM invoices WHERE status = \'paid\' AND strftime(\'%Y-%m\', payment_date) = strftime(\'%Y-%m\', \'now\')'
@@ -403,9 +404,10 @@ class AccountingService {
 
           if (index === 0) results.totalRevenue = row.totalRevenue || 0;
           else if (index === 1) results.pendingRevenue = row.pendingRevenue || 0;
-          else if (index === 2) results.totalExpenses = row.totalExpenses || 0;
-          else if (index === 3) results.monthlyExpenses = row.monthlyExpenses || 0;
-          else if (index === 4) results.monthlyRevenue = row.monthlyRevenue || 0;
+          else if (index === 2) results.pendingInvoiceCount = row.pendingInvoiceCount || 0;
+          else if (index === 3) results.totalExpenses = row.totalExpenses || 0;
+          else if (index === 4) results.monthlyExpenses = row.monthlyExpenses || 0;
+          else if (index === 5) results.monthlyRevenue = row.monthlyRevenue || 0;
 
           completed++;
           if (completed === queries.length) {

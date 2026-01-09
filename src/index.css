@@ -806,6 +806,7 @@ body {
   width: 100%;
   height: 100%;
   background-color: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
 }
 
 .modal.active {
@@ -823,6 +824,50 @@ body {
   overflow-y: auto;
   box-shadow: var(--shadow-lg);
   border: 2px solid var(--border-color);
+  position: relative;
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Modal overlay click to close */
+.modal.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  z-index: -1;
+}
+
+/* Ensure modals are properly centered on all screen sizes */
+@media (max-width: 768px) {
+  .modal-content {
+    width: 95%;
+    max-width: 95%;
+    margin: 1rem;
+    max-height: 85vh;
+  }
+}
+
+@media (max-width: 480px) {
+  .modal-content {
+    width: 98%;
+    max-width: 98%;
+    margin: 0.5rem;
+    max-height: 80vh;
+  }
 }
 
 /* Patient Form Tabs */
@@ -1493,7 +1538,7 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.4);
   z-index: 9999;
   display: flex;
   align-items: center;
@@ -1507,6 +1552,8 @@ body {
   border: 2px solid var(--primary-color);
   max-width: 300px;
   min-width: 250px;
+  position: fixed;
+  z-index: 10000;
 }
 
 .tour-tooltip.top {
@@ -1523,6 +1570,14 @@ body {
 
 .tour-tooltip.right {
   margin-left: 20px;
+}
+
+/* Ensure tour tooltips are properly centered when no specific position is set */
+.tour-tooltip.center {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
 }
 
 .tour-header {

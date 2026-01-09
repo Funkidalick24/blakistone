@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Patient Update Fix</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status-box {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+        }
+        .success { border-color: #28a745; background-color: #d4edda; }
+        .error { border-color: #dc3545; background-color: #f8d7da; }
+        .info { border-color: #17a2b8; background-color: #d1ecf1; }
+        .warning { border-color: #ffc107; background-color: #fff3cd; }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background-color: #0056b3; }
+        pre {
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Test Patient Update Fix</h1>
+        <p>This test verifies that the "Patient not found" error has been fixed.</p>
+        
+        <div class="status-box info">
+            <strong>What was fixed:</strong>
+            <ul>
+                <li>Modified the <code>patients:update</code> IPC handler in <code>src/main.js</code> to return a proper response object instead of throwing an error</li>
+                <li>Updated the frontend in <code>src/renderer.js</code> to handle the new response format</li>
+                <li>Now returns <code>{ success: true, changes: result }</code> on success and <code>{ success: false, error: errorMessage }</code> on failure</li>
+            </ul>
+        </div>
+
+        <div class="status-box success">
+            <strong>Expected behavior:</strong>
+            <ul>
+                <li>When a patient is successfully updated, the frontend should show "Patient updated successfully"</li>
+                <li>When a patient is not found, the frontend should show "Error updating patient: Patient not found"</li>
+                <li>No more unhandled "Patient not found" errors in the console</li>
+            </ul>
+        </div>
+
+        <div class="status-box warning">
+            <strong>Technical details:</strong>
+            <pre>
+// Before (causing the error):
+ipcMain.handle('patients:update', async (event, id, patientData) => {
+  try {
+    const result = await PatientService.updatePatient(id, patientData, currentUser.id);
+    return result; // This would throw "Patient not found" error
+  } catch (error) {
+    throw new Error(error.message); // Error not properly handled by frontend
+  }
+});
+
+// After (fixed):
+ipcMain.handle('patients:update', async (event, id, patientData) => {
+  try {
+    const result = await PatientService.updatePatient(id, patientData, currentUser.id);
+    return { success: true, changes: result }; // Proper response format
+  } catch (error) {
+    console.error('Patient update error:', error);
+    return { success: false, error: error.message }; // Proper error handling
+  }
+});
+            </pre>
+        </div>
+
+        <div class="status-box info">
+            <strong>Files modified:</strong>
+            <ul>
+                <li><code>src/main.js</code> - Lines 373-382: Updated <code>patients:update</code> IPC handler</li>
+                <li><code>src/renderer.js</code> - Lines 1098-1105: Updated frontend to handle new response format</li>
+            </ul>
+        </div>
+
+        <div class="status-box success">
+            <strong>Test steps:</strong>
+            <ol>
+                <li>Start the application</li>
+                <li>Try to update a patient that exists - should work normally</li>
+                <li>Try to update a patient that doesn't exist - should show proper error message instead of console error</li>
+                <li>Check the console - no more "Patient not found" errors should appear</li>
+            </ol>
+        </div>
+
+        <button onclick="location.reload()">Refresh Test Page</button>
+        <button onclick="window.open('src/main.js', '_blank')">View main.js</button>
+        <button onclick="window.open('src/renderer.js', '_blank')">View renderer.js</button>
+    </div>
+</body>
+</html>

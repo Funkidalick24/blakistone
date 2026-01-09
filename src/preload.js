@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getUsers: () => ipcRenderer.invoke('auth:getUsers'),
   updateUser: (id, updates) => ipcRenderer.invoke('auth:updateUser', id, updates),
   deleteUser: (id) => ipcRenderer.invoke('auth:deleteUser', id),
+  logout: () => ipcRenderer.invoke('auth:logout'),
+  getCurrentUser: () => ipcRenderer.invoke('auth:getCurrentUser'),
 
   // Patients
   getPatients: (searchTerm) => ipcRenderer.invoke('patients:getAll', searchTerm),
@@ -63,5 +65,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateCounter: (callback) => {
     // Example: if you need event listeners, validate and sanitize
     ipcRenderer.on('update-counter', (_event, value) => callback(value));
+  },
+
+  // Sync
+  sync: {
+    saveCredentials: (credentials) => ipcRenderer.invoke('sync:saveCredentials', credentials),
+    loadCredentials: () => ipcRenderer.invoke('sync:loadCredentials'),
+    testConnection: (credentials) => ipcRenderer.invoke('sync:testConnection', credentials),
+    performSync: () => ipcRenderer.invoke('sync:performSync'),
   }
 });
