@@ -1,5 +1,8 @@
 const bcrypt = require('bcryptjs');
 const db = require('./database');
+const SessionManager = require('./sessionManager'); // Import SessionManager
+const path = require('path');
+const sessionManager = new SessionManager(path.join(__dirname, '..')); // Create session manager instance with app directory
 
 class Auth {
   static async login(username, password) {
@@ -20,7 +23,19 @@ class Auth {
             console.log('Password comparison result:', isValidPassword);
             if (isValidPassword) {
               // Log successful login
-              this.logAudit(user.id, 'LOGIN', 'users', user.id, null, { login: true });
+              Auth.logAudit(user.id, 'LOGIN', 'users', user.id, null, { login: true });
+              
+              // Save session for the user
+              await sessionManager.saveSession({
+                user: {
+                  id: user.id,
+                  username: user.username,
+                  role: user.role,
+                  name: user.name,
+                  email: user.email
+                }
+              });
+              
               resolve({
                 id: user.id,
                 username: user.username,

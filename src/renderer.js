@@ -42,11 +42,45 @@ function clearExpiredCache() {
   }
 }
 
-// Clear patient cache specifically to ensure fresh data
+// Enhanced cache invalidation functions
+function invalidatePatientCache() {
+  clearPatientCache();
+  // Also clear related caches
+  clearAppointmentCache();
+  clearInvoiceCache();
+  clearAuditLogCache();
+}
+
 function clearPatientCache() {
-  // Clear all patient-related cache entries
   for (const [key] of dataCache) {
     if (key.startsWith('patients_')) {
+      dataCache.delete(key);
+      cacheExpiry.delete(key);
+    }
+  }
+}
+
+function clearAppointmentCache() {
+  for (const [key] of dataCache) {
+    if (key.startsWith('appointments_')) {
+      dataCache.delete(key);
+      cacheExpiry.delete(key);
+    }
+  }
+}
+
+function clearInvoiceCache() {
+  for (const [key] of dataCache) {
+    if (key.startsWith('invoices_') || key.startsWith('expenses_') || key.startsWith('payments_')) {
+      dataCache.delete(key);
+      cacheExpiry.delete(key);
+    }
+  }
+}
+
+function clearAuditLogCache() {
+  for (const [key] of dataCache) {
+    if (key.startsWith('audit_')) {
       dataCache.delete(key);
       cacheExpiry.delete(key);
     }
@@ -142,7 +176,7 @@ function initializePerformanceMonitoring() {
   }
 }
 
-// Optimized data loading with debouncing and caching
+// Improved loadPatients function
 async function loadPatients(searchTerm = '', filters = {}, forceRefresh = false) {
   const cacheKey = `patients_${searchTerm}_${JSON.stringify(filters)}`;
   
@@ -259,6 +293,11 @@ function setupEventListeners() {
   // Appointment management
   document.getElementById('add-appointment-btn').addEventListener('click', () => openAppointmentModal());
   document.getElementById('appointment-status-filter').addEventListener('change', loadAppointments);
+  
+  // Appointment tabs
+  document.querySelectorAll('.appointment-tabs .tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchAppointmentTab(btn.dataset.status));
+  });
 
   // Accounting
   document.getElementById('add-invoice-btn').addEventListener('click', () => openInvoiceModal());
@@ -457,6 +496,19 @@ function switchTab(section, tabName) {
       loadAuditLog();
       break;
   }
+}
+
+function switchAppointmentTab(status) {
+  // Update tab buttons
+  document.querySelectorAll('.appointment-tabs .tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.status === status);
+  });
+
+  // Update filter dropdown to match tab selection
+  document.getElementById('appointment-status-filter').value = status === 'all' ? '' : status;
+
+  // Load appointments with the selected status
+  loadAppointments();
 }
 
 function switchFormTab(tabName) {
@@ -1564,6 +1616,7 @@ async function loadAppointmentForEdit(appointmentId) {
       document.getElementById('appointment-doctor').value = appointment.doctor_id;
       document.getElementById('appointment-date').value = new Date(appointment.appointment_date).toISOString().slice(0, 16);
       document.getElementById('appointment-type').value = appointment.appointment_type;
+      document.getElementById('appointment-status').value = appointment.status || 'scheduled';
       document.getElementById('appointment-notes').value = appointment.notes || '';
 
       // Store ID for update
@@ -1574,7 +1627,12 @@ async function loadAppointmentForEdit(appointmentId) {
   }
 }
 
-async function handleAppointmentSubmit(e, appointmentId) {
+function editAppointment(appointmentId) {
+  openAppointmentModal(appointmentId);
+}
+
+async function handleAppointmentSubmit(e) {
+  const appointmentId = e.target.dataset.appointmentId;
   e.preventDefault();
 
   const formData = new FormData(e.target);
@@ -1583,6 +1641,7 @@ async function handleAppointmentSubmit(e, appointmentId) {
     doctorId: parseInt(formData.get('doctorId')),
     appointmentDate: formData.get('appointmentDate'),
     appointmentType: formData.get('appointmentType'),
+    status: formData.get('status'),
     notes: formData.get('notes')
   };
 
@@ -1743,9 +1802,20 @@ function openAppointmentModal(appointmentId = null) {
             </select>
           </div>
         </div>
-        <div class="form-group">
-          <label for="appointment-notes">Notes</label>
-          <textarea id="appointment-notes" name="notes" rows="3" placeholder="Appointment notes"></textarea>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="appointment-status">Status *</label>
+            <select id="appointment-status" name="status" required>
+              <option value="scheduled">Scheduled</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="no-show">No Show</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="appointment-notes">Notes</label>
+            <textarea id="appointment-notes" name="notes" rows="3" placeholder="Appointment notes"></textarea>
+          </div>
         </div>
         <div class="form-actions">
           <button type="button" class="btn btn-secondary" onclick="closeModal('appointment-modal')">Cancel</button>
@@ -1768,19 +1838,26 @@ function openAppointmentModal(appointmentId = null) {
   }
 
   // Add form submit handler
-  modal.querySelector('#appointment-form').addEventListener('submit', (e) => handleAppointmentSubmit(e, appointmentId));
+    modal.querySelector('#appointment-form').addEventListener('submit', handleAppointmentSubmit);
 
-  // Close modal functionality
-  modal.querySelector('.modal-close').addEventListener('click', () => {
-    modal.remove();
-  });
-
-  // Close modal when clicking outside content
-  modal.addEventListener('click', (e) => {
-    if (e.target === modal) {
+  // Close modal functionality - ensure proper event delegation
+    modal.querySelector('.modal-close').addEventListener('click', () => {
       modal.remove();
-    }
-  });
+    });
+  
+    // Add click outside to close
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.remove();
+      }
+    });
+  
+    // Add keyboard escape to close
+    modal.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        modal.remove();
+      }
+    });
 }
 
 // Workflow Automation Functions
@@ -2747,7 +2824,7 @@ function renderAuditTable(logs) {
   });
 }
 
-function openUserModal(userId = null) {
+window.openUserModal = function(userId = null) {
   // Create modal HTML
   const modal = document.createElement('div');
   modal.className = 'modal';
@@ -2873,7 +2950,16 @@ async function restoreBackup() {
 
 // Utility functions
 function closeModal(modalId) {
-  document.getElementById(modalId).classList.remove('active');
+  const modal = document.getElementById(modalId);
+  if (modal) {
+    modal.classList.remove('active');
+    // Remove modal from DOM after transition
+    setTimeout(() => {
+      if (modal && !modal.classList.contains('active')) {
+        modal.remove();
+      }
+    }, 300);
+  }
 }
 
 function showError(message) {
@@ -2906,6 +2992,48 @@ function debounce(func, wait) {
     timeout = setTimeout(later, wait);
   };
 }
+
+// Global Error Handling
+(function setupGlobalErrorHandling() {
+  // Handle unhandled promise rejections
+  window.addEventListener('unhandledrejection', (event) => {
+    console.error('Unhandled promise rejection:', event.reason);
+    showError('An unexpected error occurred. Please try again.');
+    event.preventDefault(); // Prevent default browser behavior
+  });
+
+  // Handle global errors
+  window.addEventListener('error', (event) => {
+    console.error('Global error:', event.error);
+    if (!event.error.message.includes('ResizeObserver')) {
+      showError('An unexpected error occurred. Please try again.');
+    }
+  });
+
+  // Add error boundary for components
+  window.withErrorBoundary = function(component) {
+    try {
+      return component();
+    } catch (error) {
+      console.error('Component error:', error);
+      return createErrorComponent(error);
+    }
+  };
+
+  // Create error component
+  function createErrorComponent(error) {
+    const container = document.createElement('div');
+    container.className = 'error-boundary';
+    container.innerHTML = `
+      <div class="error-message">
+        <h3>Something went wrong</h3>
+        <p>${error.message || 'An unexpected error occurred'}</p>
+        <button onclick="window.location.reload()">Reload Page</button>
+      </div>
+    `;
+    return container;
+  }
+})();
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
@@ -4353,7 +4481,7 @@ window.viewPatient = (id) => viewPatientDetails(id);
 window.switchScreen = switchScreen;
 window.editPatient = (id) => openPatientModal(id);
 window.deletePatient = (id) => deletePatientRecord(id);
-window.editAppointment = (id) => openAppointmentModal(id);
+window.editAppointment = (id) => editAppointment(id);
 window.updatePatientSelection = (patientId, selected) => updatePatientSelection(patientId, selected);
 window.deleteAppointment = async (id) => {
   if (confirm('Are you sure you want to delete this appointment?')) {
@@ -4849,11 +4977,60 @@ async function handleEditInvoiceSubmit(e, invoiceId) {
 window.viewInvoice = (id) => viewInvoice(id);
 window.editInvoice = (id) => editInvoice(id);
 window.editBillingCode = (id) => openBillingCodeModal(id);
-window.deleteBillingCode = (id) => showError('Delete billing code not implemented yet');
-window.editExpense = (id) => showError('Edit expense not implemented yet');
-window.deleteExpense = (id) => showError('Delete expense not implemented yet');
-window.editUser = (id) => showError('Edit user not implemented yet');
-window.deleteUser = (id) => showError('Delete user not implemented yet');
+window.deleteBillingCode = async (id) => {
+  if (!confirm('Are you sure you want to delete this billing code?')) {
+    return;
+  }
+  
+  try {
+    const result = await window.electronAPI.deleteBillingCode(id);
+    if (result && result.success) {
+      showSuccess('Billing code deleted successfully');
+      loadBillingCodes();
+    } else {
+      showError('Error deleting billing code: ' + (result?.error || 'Unknown error'));
+    }
+  } catch (error) {
+    showError('Error deleting billing code: ' + error.message);
+  }
+};
+window.editExpense = (id) => openExpenseModal(id);
+window.deleteExpense = async (id) => {
+  if (!confirm('Are you sure you want to delete this expense?')) {
+    return;
+  }
+  
+  try {
+    const result = await window.electronAPI.deleteExpense(id);
+    if (result && result.success) {
+      showSuccess('Expense deleted successfully');
+      loadExpenses();
+      loadFinancialReports(); // Refresh financial stats
+    } else {
+      showError('Error deleting expense: ' + (result?.error || 'Unknown error'));
+    }
+  } catch (error) {
+    showError('Error deleting expense: ' + error.message);
+  }
+};
+window.editUser = (id) => window.openUserModal(id);
+window.deleteUser = async (id) => {
+  if (!confirm('Are you sure you want to delete this user?')) {
+    return;
+  }
+  
+  try {
+    const result = await window.electronAPI.deleteUser(id);
+    if (result && result.success) {
+      showSuccess('User deleted successfully');
+      loadUsers();
+    } else {
+      showError('Error deleting user: ' + (result?.error || 'Unknown error'));
+    }
+  } catch (error) {
+    showError('Error deleting user: ' + error.message);
+  }
+};
 window.removeFilter = (key) => removeFilter(key);
 window.startTour = startTour;
 window.nextTourStep = nextTourStep;

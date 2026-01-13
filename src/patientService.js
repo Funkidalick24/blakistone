@@ -178,10 +178,17 @@ class PatientService {
 
   static async updatePatient(id, patientData, userId) {
     return new Promise((resolve, reject) => {
+      // Validate input
+      if (!id || !patientData || !userId) {
+        reject(new Error('Missing required parameters'));
+        return;
+      }
+
       // Get old values for audit
       db.get('SELECT * FROM patients WHERE id = ?', [id], (err, oldPatient) => {
         if (err) {
-          reject(err);
+          console.error('Database error in updatePatient:', err);
+          reject(new Error('Database error occurred'));
           return;
         }
 
@@ -190,16 +197,52 @@ class PatientService {
           return;
         }
 
+        // Validate patient data
+        const validFields = Object.keys(oldPatient).filter(key =>
+          !['id', 'patient_id', 'created_at', 'updated_at'].includes(key)
+        );
+
+        const fieldsToUpdate = Object.keys(patientData).filter(key =>
+          patientData[key] !== undefined && patientData[key] !== null
+        );
+
+        // Validate fields
+        for (const field of fieldsToUpdate) {
+          const dbKey = field
+            .replace(/([A-Z])/g, '_$1')
+            .toLowerCase()
+            .replace(/^_/, ''); // Remove leading underscore if present
+          
+          if (!validFields.includes(dbKey)) {
+            console.warn(`Unknown field: ${field} -> ${dbKey}`);
+            continue;
+          }
+        }
+
         const fields = [];
         const values = [];
 
         Object.keys(patientData).forEach(key => {
-          if (patientData[key] !== undefined) {
-            const dbKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
-            fields.push(`${dbKey} = ?`);
-            values.push(patientData[key]);
+          if (patientData[key] !== undefined && patientData[key] !== null) {
+            const dbKey = key
+              .replace(/([A-Z])/g, '_$1')
+              .toLowerCase()
+              .replace(/^_/, ''); // Remove leading underscore if present
+            
+            // Validate field exists in database
+            if (validFields.includes(dbKey)) {
+              fields.push(`${dbKey} = ?`);
+              values.push(patientData[key]);
+            } else {
+              console.warn(`Unknown field: ${key} -> ${dbKey}`);
+            }
           }
         });
+
+        if (fields.length === 0) {
+          reject(new Error('No valid fields to update'));
+          return;
+        }
 
         values.push(id);
 
@@ -207,7 +250,8 @@ class PatientService {
 
         db.run(sql, values, function(err) {
           if (err) {
-            reject(err);
+            console.error('Database error in updatePatient:', err);
+            reject(new Error('Failed to update patient'));
           } else {
             // Log update
             Auth.logAudit(userId, 'UPDATE_PATIENT', 'patients', id, oldPatient, patientData);

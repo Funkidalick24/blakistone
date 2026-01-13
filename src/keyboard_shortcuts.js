@@ -49,17 +49,18 @@ window.viewUser = (id) => {
   }
 };
 window.editUser = (id) => {
-  if (typeof openUserModal === 'function') {
-    openUserModal(id);
+  if (typeof window.openUserModal === 'function') {
+    window.openUserModal(id);
   } else {
-    console.error('openUserModal function not found');
+    console.error('window.openUserModal function not found');
   }
 };
 window.deleteUser = (id) => {
-  if (typeof deleteUser === 'function') {
-    deleteUser(id);
+  if (typeof window.deleteUser === 'function') {
+    // Call the actual delete function from renderer.js
+    window.deleteUser(id);
   } else {
-    console.error('deleteUser function not found');
+    console.error('window.deleteUser function not found');
   }
 };
 window.viewAuditLog = (id) => {

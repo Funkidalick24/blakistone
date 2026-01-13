@@ -63,87 +63,9 @@ class CredentialManager {
 
 const credentialManager = new CredentialManager();
 
-// Session Manager for user authentication state
-class SessionManager {
-  constructor() {
-    this.sessionPath = path.join(app.getPath('userData'), 'session.enc');
-    this.keyPath = path.join(app.getPath('userData'), 'session-key');
-  }
-
-  // Generate encryption key (done once)
-  async generateKey() {
-    const key = crypto.randomBytes(32);
-    await fs.writeFile(this.keyPath, key.toString('hex'));
-    return key;
-  }
-
-  // Load encryption key
-  async loadKey() {
-    try {
-      const keyHex = await fs.readFile(this.keyPath, 'utf8');
-      return Buffer.from(keyHex, 'hex');
-    } catch {
-      return await this.generateKey();
-    }
-  }
-
-  // Encrypt and save session
-  async saveSession(sessionData) {
-    const key = await this.loadKey();
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipher('aes-256-cbc', key);
-
-    let encrypted = cipher.update(JSON.stringify(sessionData), 'utf8', 'hex');
-    encrypted += cipher.final('hex');
-
-    const data = {
-      iv: iv.toString('hex'),
-      encrypted: encrypted,
-      timestamp: Date.now()
-    };
-
-    await fs.writeFile(this.sessionPath, JSON.stringify(data));
-  }
-
-  // Load and decrypt session
-  async loadSession() {
-    try {
-      const key = await this.loadKey();
-      const data = JSON.parse(await fs.readFile(this.sessionPath, 'utf8'));
-
-      // Check if session is expired (24 hours)
-      if (Date.now() - data.timestamp > 24 * 60 * 60 * 1000) {
-        await this.clearSession();
-        return null;
-      }
-
-      const decipher = crypto.createDecipher('aes-256-cbc', key);
-      let decrypted = decipher.update(data.encrypted, 'hex', 'utf8');
-      decrypted += decipher.final('utf8');
-
-      return JSON.parse(decrypted);
-    } catch {
-      return null; // No session saved yet or invalid
-    }
-  }
-
-  // Clear session
-  async clearSession() {
-    try {
-      await fs.unlink(this.sessionPath);
-    } catch {
-      // File doesn't exist, ignore
-    }
-  }
-
-  // Get current user from session
-  async getCurrentUser() {
-    const session = await this.loadSession();
-    return session ? session.user : null;
-  }
-}
-
-const sessionManager = new SessionManager();
+// Import SessionManager from separate file
+const SessionManager = require('./sessionManager');
+const sessionManager = new SessionManager(app.getPath('userData'));
 
 // Import our services (lazy-loaded)
 let Auth, PatientService, AppointmentService, AccountingService;
@@ -385,7 +307,10 @@ ipcMain.handle('patients:create', async (event, patientData) => {
   try {
     initializeDatabase();
     // Get current user from session (simplified - in real app, store in secure session)
-    const currentUser = { id: 1 }; // TODO: Implement proper session management
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await PatientService.createPatient(patientData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -396,7 +321,10 @@ ipcMain.handle('patients:update', async (event, id, patientData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     const result = await PatientService.updatePatient(id, patientData, currentUser.id);
     return result;
   } catch (error) {
@@ -409,7 +337,10 @@ ipcMain.handle('patients:delete', async (event, id) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     const result = await PatientService.deletePatient(id, currentUser.id);
     return result;
   } catch (error) {
@@ -443,7 +374,10 @@ ipcMain.handle('appointments:create', async (event, appointmentData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AppointmentService.createAppointment(appointmentData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -454,7 +388,10 @@ ipcMain.handle('appointments:update', async (event, id, appointmentData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AppointmentService.updateAppointment(id, appointmentData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -465,7 +402,10 @@ ipcMain.handle('appointments:delete', async (event, id) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     const changes = await AppointmentService.deleteAppointment(id, currentUser.id);
     return { success: true, changes: changes };
   } catch (error) {
@@ -499,7 +439,10 @@ ipcMain.handle('accounting:createInvoice', async (event, invoiceData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.createInvoice(invoiceData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -520,7 +463,10 @@ ipcMain.handle('accounting:updateInvoicePayment', async (event, id, paymentData)
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.updateInvoicePayment(id, paymentData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -531,7 +477,10 @@ ipcMain.handle('accounting:createExpense', async (event, expenseData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.createExpense(expenseData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -542,7 +491,10 @@ ipcMain.handle('accounting:updateExpense', async (event, id, expenseData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.updateExpense(id, expenseData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -593,7 +545,10 @@ ipcMain.handle('accounting:updateInvoice', async (event, invoiceId, invoiceData)
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.updateInvoice(invoiceId, invoiceData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -605,7 +560,10 @@ ipcMain.handle('accounting:createBillingCode', async (event, codeData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.createBillingCode(codeData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -626,7 +584,10 @@ ipcMain.handle('accounting:updateBillingCode', async (event, id, codeData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.updateBillingCode(id, codeData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -638,7 +599,10 @@ ipcMain.handle('accounting:createAppointmentBilling', async (event, appointmentI
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.createAppointmentBilling(appointmentId, billingData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -659,7 +623,10 @@ ipcMain.handle('accounting:generateInvoiceFromAppointment', async (event, appoin
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.generateInvoiceFromAppointment(appointmentId, currentUser.id);
   } catch (error) {
     throw new Error(error.message);
@@ -671,7 +638,10 @@ ipcMain.handle('accounting:recordPayment', async (event, paymentData) => {
   validateSender(event);
   try {
     initializeDatabase();
-    const currentUser = { id: 1 };
+    const currentUser = await sessionManager.getCurrentUser();
+    if (!currentUser) {
+      throw new Error('No active session found');
+    }
     return await AccountingService.recordPayment(paymentData, currentUser.id);
   } catch (error) {
     throw new Error(error.message);

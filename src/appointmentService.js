@@ -4,84 +4,108 @@ const Auth = require('./auth');
 class AppointmentService {
   static async createAppointment(appointmentData, userId) {
     return new Promise((resolve, reject) => {
-      const sql = `
-        INSERT INTO appointments (
-          patient_id, doctor_id, appointment_date, appointment_type, notes
-        ) VALUES (?, ?, ?, ?, ?)
-      `;
-
-      const values = [
-        appointmentData.patientId,
-        appointmentData.doctorId,
-        appointmentData.appointmentDate,
-        appointmentData.appointmentType,
-        appointmentData.notes
-      ];
-
-      db.run(sql, values, function(err) {
-        if (err) {
-          reject(err);
-        } else {
-          // Log creation
-          Auth.logAudit(userId, 'CREATE_APPOINTMENT', 'appointments', this.lastID, null, appointmentData);
-          resolve(this.lastID);
+      try {
+        // Validate input
+        if (!appointmentData || !userId) {
+          reject(new Error('Missing required parameters'));
+          return;
         }
-      });
+
+        // Validate appointment data
+        if (!appointmentData.patientId || !appointmentData.doctorId || !appointmentData.appointmentDate) {
+          reject(new Error('Missing required appointment fields'));
+          return;
+        }
+
+        const sql = `
+          INSERT INTO appointments (
+            patient_id, doctor_id, appointment_date, appointment_type, notes
+          ) VALUES (?, ?, ?, ?, ?)
+        `;
+
+        const values = [
+          appointmentData.patientId,
+          appointmentData.doctorId,
+          appointmentData.appointmentDate,
+          appointmentData.appointmentType || 'consultation',
+          appointmentData.notes || null
+        ];
+
+        db.run(sql, values, function(err) {
+          if (err) {
+            console.error('Database error in createAppointment:', err);
+            reject(new Error('Failed to create appointment'));
+          } else {
+            // Log creation
+            Auth.logAudit(userId, 'CREATE_APPOINTMENT', 'appointments', this.lastID, null, appointmentData);
+            resolve(this.lastID);
+          }
+        });
+      } catch (error) {
+        console.error('Error in createAppointment:', error);
+        reject(new Error('Failed to create appointment'));
+      }
     });
   }
 
   static async getAppointments(filters = {}, limit = 50, offset = 0) {
     return new Promise((resolve, reject) => {
-      let sql = `
-        SELECT a.*, p.first_name, p.last_name, p.patient_id,
-               u.name as doctor_name
-        FROM appointments a
-        JOIN patients p ON a.patient_id = p.id
-        JOIN users u ON a.doctor_id = u.id
-      `;
+      try {
+        let sql = `
+          SELECT a.*, p.first_name, p.last_name, p.patient_id,
+                 u.name as doctor_name
+          FROM appointments a
+          JOIN patients p ON a.patient_id = p.id
+          JOIN users u ON a.doctor_id = u.id
+        `;
 
-      const params = [];
-      const conditions = [];
+        const params = [];
+        const conditions = [];
 
-      if (filters.patientId) {
-        conditions.push('a.patient_id = ?');
-        params.push(filters.patientId);
-      }
-
-      if (filters.doctorId) {
-        conditions.push('a.doctor_id = ?');
-        params.push(filters.doctorId);
-      }
-
-      if (filters.status) {
-        conditions.push('a.status = ?');
-        params.push(filters.status);
-      }
-
-      if (filters.dateFrom) {
-        conditions.push('DATE(a.appointment_date) >= ?');
-        params.push(filters.dateFrom);
-      }
-
-      if (filters.dateTo) {
-        conditions.push('DATE(a.appointment_date) <= ?');
-        params.push(filters.dateTo);
-      }
-
-      if (conditions.length > 0) {
-        sql += ' WHERE ' + conditions.join(' AND ');
-      }
-
-      sql += ' ORDER BY a.appointment_date DESC LIMIT ? OFFSET ?';
-      params.push(limit, offset);
-
-      db.all(sql, params, (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(rows);
+        if (filters.patientId) {
+          conditions.push('a.patient_id = ?');
+          params.push(filters.patientId);
         }
-      });
+
+        if (filters.doctorId) {
+          conditions.push('a.doctor_id = ?');
+          params.push(filters.doctorId);
+        }
+
+        if (filters.status) {
+          conditions.push('a.status = ?');
+          params.push(filters.status);
+        }
+
+        if (filters.dateFrom) {
+          conditions.push('DATE(a.appointment_date) >= ?');
+          params.push(filters.dateFrom);
+        }
+
+        if (filters.dateTo) {
+          conditions.push('DATE(a.appointment_date) <= ?');
+          params.push(filters.dateTo);
+        }
+
+        if (conditions.length > 0) {
+          sql += ' WHERE ' + conditions.join(' AND ');
+        }
+
+        sql += ' ORDER BY a.appointment_date DESC LIMIT ? OFFSET ?';
+        params.push(limit, offset);
+
+        db.all(sql, params, (err, rows) => {
+          if (err) {
+            console.error('Database error in getAppointments:', err);
+            reject(new Error('Failed to retrieve appointments'));
+          } else {
+            resolve(rows);
+          }
+        });
+      } catch (error) {
+        console.error('Error in getAppointments:', error);
+        reject(new Error('An unexpected error occurred while retrieving appointments'));
+      }
     });
   }
 
@@ -160,50 +184,63 @@ class AppointmentService {
         return;
       }
 
-      // Determine default billing code based on appointment type
-      let defaultCode;
-      switch (appointment.appointment_type) {
-        case 'consultation':
-          defaultCode = 'CONSULT';
-          break;
-        case 'follow-up':
-          defaultCode = 'FOLLOWUP';
-          break;
-        case 'surgery':
-          defaultCode = 'SURGERY_CONSULT';
-          break;
-        case 'therapy':
-          defaultCode = 'PHYSIO';
-          break;
-        case 'assessment':
-          defaultCode = 'CONSULT';
-          break;
-        default:
-          defaultCode = 'CONSULT';
-      }
+      // Get default billing code dynamically
+      getDefaultBillingCode(appointment.appointment_type)
+        .then(billingCode => {
+          if (!billingCode) {
+            console.warn('No billing code available for appointment type:', appointment.appointment_type);
+            return;
+          }
 
-      // Get billing code details
-      db.get('SELECT * FROM billing_codes WHERE code = ? AND active = 1', [defaultCode], (err, billingCode) => {
-        if (err || !billingCode) {
+          // Create appointment billing
+          const billingData = {
+            billingCodeId: billingCode.id,
+            quantity: 1,
+            unitPrice: billingCode.default_price
+          };
+
+          const AccountingService = require('./accountingService');
+          return AccountingService.createAppointmentBilling(appointmentId, billingData, userId);
+        })
+        .then(() => {
+          console.log(`Default billing created for appointment ${appointmentId}`);
+        })
+        .catch(error => {
+          console.error('Error creating default billing:', error);
+        });
+    });
+  }
+
+  // Get default billing code dynamically
+  static getDefaultBillingCode(appointmentType) {
+    return new Promise((resolve, reject) => {
+      const sql = `
+        SELECT * FROM billing_codes
+        WHERE category = ? AND active = 1
+        ORDER BY default_price DESC
+        LIMIT 1
+      `;
+      
+      db.get(sql, [appointmentType], (err, billingCode) => {
+        if (err) {
           console.error('Error getting billing code:', err);
+          resolve(null);
           return;
         }
-
-        // Create appointment billing
-        const billingData = {
-          billingCodeId: billingCode.id,
-          quantity: 1,
-          unitPrice: billingCode.default_price
-        };
-
-        const AccountingService = require('./accountingService');
-        AccountingService.createAppointmentBilling(appointmentId, billingData, userId)
-          .then(() => {
-            console.log(`Default billing created for appointment ${appointmentId}`);
-          })
-          .catch(error => {
-            console.error('Error creating default billing:', error);
+        
+        if (billingCode) {
+          resolve(billingCode);
+        } else {
+          // Fallback to consultation code
+          db.get('SELECT * FROM billing_codes WHERE code = ? AND active = 1', ['CONSULT'], (err, fallbackCode) => {
+            if (err || !fallbackCode) {
+              console.warn('No billing code found, using defaults');
+              resolve({ id: 1, code: 'CONSULT', default_price: 100 });
+            } else {
+              resolve(fallbackCode);
+            }
           });
+        }
       });
     });
   }
