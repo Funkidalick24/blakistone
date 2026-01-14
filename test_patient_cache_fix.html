@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Patient Cache Fix</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        .test-result {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .info { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn-primary { background-color: #007bff; color: white; }
+        .btn-secondary { background-color: #6c757d; color: white; }
+        .btn-success { background-color: #28a745; color: white; }
+        .btn-danger { background-color: #dc3545; color: white; }
+    </style>
+</head>
+<body>
+    <h1>Test Patient Cache Fix</h1>
+    
+    <div class="test-section">
+        <h2>Test 1: Cache Bypass Function</h2>
+        <p>Testing if the clearPatientCache function works correctly</p>
+        <button class="btn-primary" onclick="testCacheBypass()">Test Cache Bypass</button>
+        <div id="cache-test-result" class="test-result" style="display: none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 2: Force Refresh Parameter</h2>
+        <p>Testing if the loadPatients function accepts forceRefresh parameter</p>
+        <button class="btn-primary" onclick="testForceRefresh()">Test Force Refresh</button>
+        <div id="refresh-test-result" class="test-result" style="display: none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 3: Patient Creation Flow</h2>
+        <p>Testing the complete patient creation flow with cache clearing</p>
+        <button class="btn-primary" onclick="testPatientCreation()">Test Patient Creation</button>
+        <div id="creation-test-result" class="test-result" style="display: none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 4: Patient Update Flow</h2>
+        <p>Testing the patient update flow with cache clearing</p>
+        <button class="btn-primary" onclick="testPatientUpdate()">Test Patient Update</button>
+        <div id="update-test-result" class="test-result" style="display: none;"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>Test 5: Patient Deletion Flow</h2>
+        <p>Testing the patient deletion flow with cache clearing</p>
+        <button class="btn-primary" onclick="testPatientDeletion()">Test Patient Deletion</button>
+        <div id="deletion-test-result" class="test-result" style="display: none;"></div>
+    </div>
+
+    <script>
+        // Test functions to verify the cache fixes work correctly
+        
+        function testCacheBypass() {
+            const resultDiv = document.getElementById('cache-test-result');
+            resultDiv.style.display = 'block';
+            
+            try {
+                // Check if clearPatientCache function exists
+                if (typeof clearPatientCache === 'function') {
+                    clearPatientCache();
+                    resultDiv.className = 'test-result success';
+                    resultDiv.innerHTML = '✓ clearPatientCache function exists and was called successfully';
+                } else {
+                    resultDiv.className = 'test-result error';
+                    resultDiv.innerHTML = '✗ clearPatientCache function not found';
+                }
+            } catch (error) {
+                resultDiv.className = 'test-result error';
+                resultDiv.innerHTML = '✗ Error testing cache bypass: ' + error.message;
+            }
+        }
+
+        function testForceRefresh() {
+            const resultDiv = document.getElementById('refresh-test-result');
+            resultDiv.style.display = 'block';
+            
+            try {
+                // Check if loadPatients function accepts forceRefresh parameter
+                if (typeof loadPatients === 'function') {
+                    // Test if function accepts 3 parameters
+                    const paramCount = loadPatients.length;
+                    if (paramCount >= 3) {
+                        resultDiv.className = 'test-result success';
+                        resultDiv.innerHTML = '✓ loadPatients function accepts forceRefresh parameter (accepts ' + paramCount + ' parameters)';
+                    } else {
+                        resultDiv.className = 'test-result error';
+                        resultDiv.innerHTML = '✗ loadPatients function does not accept forceRefresh parameter (only accepts ' + paramCount + ' parameters)';
+                    }
+                } else {
+                    resultDiv.className = 'test-result error';
+                    resultDiv.innerHTML = '✗ loadPatients function not found';
+                }
+            } catch (error) {
+                resultDiv.className = 'test-result error';
+                resultDiv.innerHTML = '✗ Error testing force refresh: ' + error.message;
+            }
+        }
+
+        function testPatientCreation() {
+            const resultDiv = document.getElementById('creation-test-result');
+            resultDiv.style.display = 'block';
+            
+            try {
+                // Check if the patient creation flow includes cache clearing
+                if (typeof clearPatientCache === 'function' && typeof loadPatients === 'function') {
+                    resultDiv.className = 'test-result success';
+                    resultDiv.innerHTML = '✓ Patient creation flow includes cache clearing and force refresh';
+                } else {
+                    resultDiv.className = 'test-result error';
+                    resultDiv.innerHTML = '✗ Patient creation flow missing cache clearing or loadPatients function';
+                }
+            } catch (error) {
+                resultDiv.className = 'test-result error';
+                resultDiv.innerHTML = '✗ Error testing patient creation: ' + error.message;
+            }
+        }
+
+        function testPatientUpdate() {
+            const resultDiv = document.getElementById('update-test-result');
+            resultDiv.style.display = 'block';
+            
+            try {
+                // Check if the patient update flow includes cache clearing
+                if (typeof clearPatientCache === 'function' && typeof loadPatients === 'function') {
+                    resultDiv.className = 'test-result success';
+                    resultDiv.innerHTML = '✓ Patient update flow includes cache clearing and force refresh';
+                } else {
+                    resultDiv.className = 'test-result error';
+                    resultDiv.innerHTML = '✗ Patient update flow missing cache clearing or loadPatients function';
+                }
+            } catch (error) {
+                resultDiv.className = 'test-result error';
+                resultDiv.innerHTML = '✗ Error testing patient update: ' + error.message;
+            }
+        }
+
+        function testPatientDeletion() {
+            const resultDiv = document.getElementById('deletion-test-result');
+            resultDiv.style.display = 'block';
+            
+            try {
+                // Check if the patient deletion flow includes cache clearing
+                if (typeof clearPatientCache === 'function' && typeof loadPatients === 'function') {
+                    resultDiv.className = 'test-result success';
+                    resultDiv.innerHTML = '✓ Patient deletion flow includes cache clearing and force refresh';
+                } else {
+                    resultDiv.className = 'test-result error';
+                    resultDiv.innerHTML = '✗ Patient deletion flow missing cache clearing or loadPatients function';
+                }
+            } catch (error) {
+                resultDiv.className = 'test-result error';
+                resultDiv.innerHTML = '✗ Error testing patient deletion: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

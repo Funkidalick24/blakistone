@@ -42,6 +42,51 @@ function clearExpiredCache() {
   }
 }
 
+// Enhanced cache invalidation functions
+function invalidatePatientCache() {
+  clearPatientCache();
+  // Also clear related caches
+  clearAppointmentCache();
+  clearInvoiceCache();
+  clearAuditLogCache();
+}
+
+function clearPatientCache() {
+  for (const [key] of dataCache) {
+    if (key.startsWith('patients_')) {
+      dataCache.delete(key);
+      cacheExpiry.delete(key);
+    }
+  }
+}
+
+function clearAppointmentCache() {
+  for (const [key] of dataCache) {
+    if (key.startsWith('appointments_')) {
+      dataCache.delete(key);
+      cacheExpiry.delete(key);
+    }
+  }
+}
+
+function clearInvoiceCache() {
+  for (const [key] of dataCache) {
+    if (key.startsWith('invoices_') || key.startsWith('expenses_') || key.startsWith('payments_')) {
+      dataCache.delete(key);
+      cacheExpiry.delete(key);
+    }
+  }
+}
+
+function clearAuditLogCache() {
+  for (const [key] of dataCache) {
+    if (key.startsWith('audit_')) {
+      dataCache.delete(key);
+      cacheExpiry.delete(key);
+    }
+  }
+}
+
 // Lazy loading for images and heavy components
 function lazyLoadImages() {
   const images = document.querySelectorAll('img[data-src]');
@@ -131,14 +176,17 @@ function initializePerformanceMonitoring() {
   }
 }
 
-// Optimized data loading with debouncing and caching
-async function loadPatients(searchTerm = '', filters = {}) {
+// Improved loadPatients function
+async function loadPatients(searchTerm = '', filters = {}, forceRefresh = false) {
   const cacheKey = `patients_${searchTerm}_${JSON.stringify(filters)}`;
-  const cached = getCachedData(cacheKey);
-
-  if (cached) {
-    renderPatientsTable(cached);
-    return;
+  
+  // If forceRefresh is true, bypass cache and fetch fresh data
+  if (!forceRefresh) {
+    const cached = getCachedData(cacheKey);
+    if (cached) {
+      renderPatientsTable(cached);
+      return;
+    }
   }
 
   try {
@@ -150,8 +198,10 @@ async function loadPatients(searchTerm = '', filters = {}) {
 
     const patients = await window.electronAPI.getPatients(searchTerm, undefined, undefined, filters);
 
-    // Cache the results
-    setCachedData(cacheKey, patients);
+    // Only cache if not forcing refresh
+    if (!forceRefresh) {
+      setCachedData(cacheKey, patients);
+    }
 
     renderPatientsTable(patients);
   } catch (error) {
@@ -243,10 +293,18 @@ function setupEventListeners() {
   // Appointment management
   document.getElementById('add-appointment-btn').addEventListener('click', () => openAppointmentModal());
   document.getElementById('appointment-status-filter').addEventListener('change', loadAppointments);
+  
+  // Appointment tabs
+  document.querySelectorAll('.appointment-tabs .tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchAppointmentTab(btn.dataset.status));
+  });
 
   // Accounting
   document.getElementById('add-invoice-btn').addEventListener('click', () => openInvoiceModal());
   document.getElementById('add-expense-btn').addEventListener('click', () => openExpenseModal());
+  document.getElementById('add-billing-code-btn').addEventListener('click', () => openBillingCodeModal());
+  document.getElementById('record-payment-btn').addEventListener('click', () => openPaymentModal());
+  document.getElementById('clear-invoices-btn').addEventListener('click', clearAllInvoices);
 
   // Accounting tabs
   document.querySelectorAll('.accounting-tabs .tab-btn').forEach(btn => {
@@ -273,9 +331,30 @@ function setupEventListeners() {
 
   // Patient search and filters
   document.getElementById('patient-search').addEventListener('input', debounce(searchPatients, 300));
-  document.getElementById('patient-gender-filter').addEventListener('change', loadPatients);
-  document.getElementById('patient-smoking-filter').addEventListener('change', loadPatients);
-  document.getElementById('patient-insurance-filter').addEventListener('input', debounce(loadPatients, 300));
+  document.getElementById('patient-gender-filter').addEventListener('change', () => {
+    const filters = {
+      gender: document.getElementById('patient-gender-filter').value,
+      smokingStatus: document.getElementById('patient-smoking-filter').value,
+      insuranceProvider: document.getElementById('patient-insurance-filter').value
+    };
+    loadPatients('', filters, true); // Force refresh for filters
+  });
+  document.getElementById('patient-smoking-filter').addEventListener('change', () => {
+    const filters = {
+      gender: document.getElementById('patient-gender-filter').value,
+      smokingStatus: document.getElementById('patient-smoking-filter').value,
+      insuranceProvider: document.getElementById('patient-insurance-filter').value
+    };
+    loadPatients('', filters, true); // Force refresh for filters
+  });
+  document.getElementById('patient-insurance-filter').addEventListener('input', debounce(() => {
+    const filters = {
+      gender: document.getElementById('patient-gender-filter').value,
+      smokingStatus: document.getElementById('patient-smoking-filter').value,
+      insuranceProvider: document.getElementById('patient-insurance-filter').value
+    };
+    loadPatients('', filters, true); // Force refresh for filters
+  }, 300));
 
   // Modal close
   document.querySelectorAll('.modal-close').forEach(close => {
@@ -365,7 +444,7 @@ function switchScreen(screenName) {
       loadDashboard();
       break;
     case 'patients':
-      loadPatients();
+      loadPatients('', {}, true); // Force refresh when switching to patients screen
       break;
     case 'appointments':
       loadAppointments();
@@ -398,6 +477,12 @@ function switchTab(section, tabName) {
     case 'invoices':
       loadInvoices();
       break;
+    case 'billing-codes':
+      loadBillingCodes();
+      break;
+    case 'payments':
+      loadPayments();
+      break;
     case 'expenses':
       loadExpenses();
       break;
@@ -411,6 +496,19 @@ function switchTab(section, tabName) {
       loadAuditLog();
       break;
   }
+}
+
+function switchAppointmentTab(status) {
+  // Update tab buttons
+  document.querySelectorAll('.appointment-tabs .tab-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.status === status);
+  });
+
+  // Update filter dropdown to match tab selection
+  document.getElementById('appointment-status-filter').value = status === 'all' ? '' : status;
+
+  // Load appointments with the selected status
+  loadAppointments();
 }
 
 function switchFormTab(tabName) {
@@ -452,7 +550,6 @@ async function loadDashboard() {
 
     document.getElementById('total-patients').textContent = patientStats.total;
     document.getElementById('today-appointments').textContent = appointmentStats.today;
-    document.getElementById('pending-invoices').textContent = financialStats.pendingRevenue;
     document.getElementById('monthly-revenue').textContent = `$${financialStats.monthlyRevenue.toFixed(2)}`;
 
     // Load revenue chart
@@ -661,6 +758,10 @@ function loadPatientDemographicsChart() {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
+        title: {
+          display: true,
+          text: 'Patient Demographics'
+        },
         legend: {
           position: 'bottom'
         },
@@ -676,7 +777,7 @@ function loadPatientDemographicsChart() {
   });
 }
 
-function loadAppointmentTrendsChart() {
+async function loadAppointmentTrendsChart() {
   const ctx = document.createElement('canvas');
   ctx.id = 'appointment-trends-chart';
   ctx.style.height = '300px';
@@ -696,13 +797,28 @@ function loadAppointmentTrendsChart() {
     mainChartContainer.parentNode.insertBefore(container, mainChartContainer.nextSibling);
   }
 
+  // Get appointment stats
+  const stats = await window.electronAPI.getAppointmentStats();
+  if (!stats.monthlyData || stats.monthlyData.length === 0) {
+    container.innerHTML = `
+      <div class="chart-header">
+        <h3><i class="fas fa-calendar-alt"></i> Appointment Trends</h3>
+      </div>
+      <div class="empty-state">
+        <p>No appointment data available yet.</p>
+        <button onclick="switchScreen('appointments')">Create First Appointment</button>
+      </div>
+    `;
+    return;
+  }
+
   new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: [],
+      labels: stats.monthlyData.map(d => d.month),
       datasets: [{
         label: 'Appointments',
-        data: [],
+        data: stats.monthlyData.map(d => d.count),
         backgroundColor: 'rgba(33, 150, 243, 0.6)',
         borderColor: '#2196F3',
         borderWidth: 1
@@ -711,9 +827,25 @@ function loadAppointmentTrendsChart() {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      plugins: {
+        title: {
+          display: true,
+          text: 'Appointment Trends'
+        }
+      },
       scales: {
         y: {
-          beginAtZero: true
+          beginAtZero: true,
+          title: {
+            display: true,
+            text: 'Number of Appointments'
+          }
+        },
+        x: {
+          title: {
+            display: true,
+            text: 'Month'
+          }
         }
       }
     }
@@ -769,11 +901,30 @@ function loadFinancialAnalyticsChart() {
         intersect: false
       },
       plugins: {
+        title: {
+          display: true,
+          text: 'Financial Analytics'
+        },
         tooltip: {
           callbacks: {
             label: function(context) {
               return `${context.dataset.label}: $${context.parsed.y.toLocaleString()}`;
             }
+          }
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          title: {
+            display: true,
+            text: 'Amount ($)'
+          }
+        },
+        x: {
+          title: {
+            display: true,
+            text: 'Month'
           }
         }
       }
@@ -783,8 +934,8 @@ function loadFinancialAnalyticsChart() {
 
 
 // Alternative function name to avoid conflicts
-async function loadPatientsData(searchTerm = '', filters = {}) {
-  return loadPatients(searchTerm, filters);
+async function loadPatientsData(searchTerm = '', filters = {}, forceRefresh = false) {
+  return loadPatients(searchTerm, filters, forceRefresh);
 }
 
 function renderPatientsTable(patients) {
@@ -797,7 +948,7 @@ function renderPatientsTable(patients) {
     row.innerHTML = `
       <td role="gridcell">
         <input type="checkbox" class="patient-checkbox" data-patient-id="${patient.id}"
-               onchange="updatePatientSelection(${patient.id}, this.checked)"
+               onchange="window.updatePatientSelection(${patient.id}, this.checked)"
                aria-label="Select patient ${patient.first_name} ${patient.last_name}">
       </td>
       <td role="gridcell">${patient.patient_id}</td>
@@ -848,7 +999,7 @@ function updateSelectAllCheckbox() {
 
 function searchPatients() {
   const searchTerm = document.getElementById('patient-search').value;
-  loadPatients(searchTerm);
+  loadPatients(searchTerm, {}, true); // Force refresh for search to ensure latest data
 }
 
 function openPatientModal(patientId = null) {
@@ -1034,14 +1185,24 @@ async function handlePatientSubmit(e) {
     }
 
     if (isEdit) {
-      await window.electronAPI.updatePatient(isEdit, patientData);
-      showSuccess('Patient updated successfully');
+      const result = await window.electronAPI.updatePatient(parseInt(isEdit), patientData);
+      if (result && result.success) {
+        showSuccess('Patient updated successfully');
+        // Clear patient cache to ensure fresh data is loaded
+        clearPatientCache();
+      } else {
+        showError('Error updating patient: ' + (result?.error || 'Unknown error'));
+        return;
+      }
     } else {
       await window.electronAPI.savePatient(patientData);
       showSuccess('Patient created successfully');
+      // Clear patient cache to ensure fresh data is loaded
+      clearPatientCache();
     }
     closeModal('patient-modal');
-    loadPatients();
+    // Force reload patients list to show immediate changes
+    loadPatients('', {}, true);
   } catch (error) {
     console.error('Patient save error:', error);
     showError('Error saving patient: ' + (error.message || 'Unknown error occurred'));
@@ -1330,6 +1491,13 @@ function showPatientDetailsModal(patient) {
       modal.remove();
     });
   }
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 async function deletePatientRecord(patientId) {
@@ -1338,9 +1506,16 @@ async function deletePatientRecord(patientId) {
   }
 
   try {
-    await window.electronAPI.deletePatient(patientId);
-    loadPatients();
-    showSuccess('Patient deleted successfully');
+    const result = await window.electronAPI.deletePatient(parseInt(patientId));
+    if (result && result.success) {
+      // Clear patient cache to ensure fresh data is loaded
+      clearPatientCache();
+      // Force reload patients list to show immediate changes
+      loadPatients('', {}, true);
+      showSuccess('Patient deleted successfully');
+    } else {
+      showError('Error deleting patient: ' + (result?.error || 'Unknown error'));
+    }
   } catch (error) {
     showError('Error deleting patient: ' + error.message);
   }
@@ -1358,20 +1533,40 @@ async function loadAppointments() {
   }
 }
 
-function renderAppointmentsTable(appointments) {
+async function renderAppointmentsTable(appointments) {
   const tbody = document.getElementById('appointments-tbody');
   tbody.innerHTML = '';
 
-  appointments.forEach(appointment => {
+  // Get billing information for each appointment
+  const appointmentsWithBilling = await Promise.all(
+    appointments.map(async (appointment) => {
+      try {
+        const billings = await window.electronAPI.getAppointmentBillings(appointment.id);
+        const totalBilled = billings.reduce((sum, billing) => sum + billing.total_price, 0);
+        const hasInvoice = billings.some(billing => billing.invoice_id);
+        return { ...appointment, billings, totalBilled, hasInvoice };
+      } catch (error) {
+        console.error('Error loading billing for appointment:', appointment.id, error);
+        return { ...appointment, billings: [], totalBilled: 0, hasInvoice: false };
+      }
+    })
+  );
+
+  appointmentsWithBilling.forEach(appointment => {
     const row = document.createElement('tr');
+    const billingInfo = appointment.totalBilled > 0 ?
+      `<br><small class="billing-info">Billed: $${appointment.totalBilled.toFixed(2)} ${appointment.hasInvoice ? '(Invoiced)' : ''}</small>` : '';
+
     row.innerHTML = `
-      <td>${new Date(appointment.appointment_date).toLocaleString()}</td>
+      <td>${new Date(appointment.appointment_date).toLocaleString()}${billingInfo}</td>
       <td>${appointment.first_name} ${appointment.last_name}</td>
       <td>${appointment.doctor_name}</td>
       <td>${appointment.appointment_type || ''}</td>
       <td><span class="status-${appointment.status}">${appointment.status}</span></td>
       <td>
         <button class="action-btn edit" onclick="editAppointment(${appointment.id})">Edit</button>
+        ${appointment.status === 'completed' && appointment.totalBilled > 0 && !appointment.hasInvoice ?
+          `<button class="action-btn primary" onclick="createInvoiceFromAppointment(${appointment.id})">Create Invoice</button>` : ''}
         ${currentUser.role === 'admin' ? `<button class="action-btn delete" onclick="deleteAppointment(${appointment.id})">Delete</button>` : ''}
       </td>
     `;
@@ -1379,9 +1574,290 @@ function renderAppointmentsTable(appointments) {
   });
 }
 
-function openAppointmentModal() {
-  // Implementation for appointment modal
-  showError('Appointment modal not implemented yet');
+async function loadPatientsForAppointment() {
+  try {
+    const patients = await window.electronAPI.getPatients();
+    const select = document.getElementById('appointment-patient');
+
+    patients.forEach(patient => {
+      const option = document.createElement('option');
+      option.value = patient.id;
+      option.textContent = `${patient.patient_id} - ${patient.first_name} ${patient.last_name}`;
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading patients for appointment:', error);
+  }
+}
+
+async function loadDoctorsForAppointment() {
+  try {
+    const doctors = await window.electronAPI.getUsers({ role: 'doctor' });
+    const select = document.getElementById('appointment-doctor');
+
+    doctors.forEach(doctor => {
+      const option = document.createElement('option');
+      option.value = doctor.id;
+      option.textContent = `${doctor.name}`;
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading doctors for appointment:', error);
+  }
+}
+
+async function loadAppointmentForEdit(appointmentId) {
+  try {
+    const appointments = await window.electronAPI.getAppointments({ id: appointmentId });
+    if (appointments.length > 0) {
+      const appointment = appointments[0];
+
+      document.getElementById('appointment-patient').value = appointment.patient_id;
+      document.getElementById('appointment-doctor').value = appointment.doctor_id;
+      document.getElementById('appointment-date').value = new Date(appointment.appointment_date).toISOString().slice(0, 16);
+      document.getElementById('appointment-type').value = appointment.appointment_type;
+      document.getElementById('appointment-status').value = appointment.status || 'scheduled';
+      document.getElementById('appointment-notes').value = appointment.notes || '';
+
+      // Store ID for update
+      document.getElementById('appointment-form').dataset.appointmentId = appointmentId;
+    }
+  } catch (error) {
+    console.error('Error loading appointment for edit:', error);
+  }
+}
+
+function editAppointment(appointmentId) {
+  openAppointmentModal(appointmentId);
+}
+
+async function handleAppointmentSubmit(e) {
+  const appointmentId = e.target.dataset.appointmentId;
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const appointmentData = {
+    patientId: parseInt(formData.get('patientId')),
+    doctorId: parseInt(formData.get('doctorId')),
+    appointmentDate: formData.get('appointmentDate'),
+    appointmentType: formData.get('appointmentType'),
+    status: formData.get('status'),
+    notes: formData.get('notes')
+  };
+
+  try {
+    if (appointmentId) {
+      await window.electronAPI.updateAppointment(appointmentId, appointmentData);
+      showSuccess('Appointment updated successfully');
+    } else {
+      await window.electronAPI.createAppointment(appointmentData);
+      showSuccess('Appointment scheduled successfully');
+    }
+    closeModal('appointment-modal');
+    loadAppointments();
+  } catch (error) {
+    showError('Error saving appointment: ' + error.message);
+  }
+}
+
+async function loadExpenseForEdit(expenseId) {
+  try {
+    const expenses = await window.electronAPI.getExpenses();
+    const expense = expenses.find(e => e.id === expenseId);
+    if (expense) {
+      document.getElementById('expense-description').value = expense.description;
+      document.getElementById('expense-category').value = expense.category;
+      document.getElementById('expense-amount').value = expense.amount;
+      document.getElementById('expense-date').value = expense.expense_date.split('T')[0];
+      document.getElementById('expense-vendor').value = expense.vendor || '';
+      document.getElementById('expense-receipt').value = expense.receipt_path || '';
+      document.getElementById('expense-notes').value = expense.notes || '';
+
+      // Store ID for update
+      document.getElementById('expense-form').dataset.expenseId = expenseId;
+    }
+  } catch (error) {
+    console.error('Error loading expense for edit:', error);
+  }
+}
+
+async function handleExpenseSubmit(e, expenseId) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const expenseData = {
+    description: formData.get('description'),
+    category: formData.get('category'),
+    amount: parseFloat(formData.get('amount')),
+    expenseDate: formData.get('expenseDate'),
+    vendor: formData.get('vendor') || null,
+    receiptPath: formData.get('receiptPath') || null,
+    notes: formData.get('notes') || null
+  };
+
+  try {
+    if (expenseId) {
+      await window.electronAPI.updateExpense(expenseId, expenseData);
+      showSuccess('Expense updated successfully');
+    } else {
+      await window.electronAPI.createExpense(expenseData);
+      showSuccess('Expense added successfully');
+    }
+    closeModal('expense-modal');
+    loadExpenses();
+    loadFinancialReports(); // Refresh financial stats
+  } catch (error) {
+    showError('Error saving expense: ' + error.message);
+  }
+}
+
+async function loadUserForEdit(userId) {
+  try {
+    const users = await window.electronAPI.getUsers();
+    const user = users.find(u => u.id === userId);
+    if (user) {
+      document.getElementById('user-username').value = user.username;
+      document.getElementById('user-name').value = user.name;
+      document.getElementById('user-email').value = user.email || '';
+      document.getElementById('user-phone').value = user.phone || '';
+      document.getElementById('user-role').value = user.role;
+
+      // Store ID for update
+      document.getElementById('user-form').dataset.userId = userId;
+    }
+  } catch (error) {
+    console.error('Error loading user for edit:', error);
+  }
+}
+
+async function handleUserSubmit(e, userId) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const userData = {
+    username: formData.get('username'),
+    name: formData.get('name'),
+    email: formData.get('email') || null,
+    phone: formData.get('phone') || null,
+    role: formData.get('role'),
+    password: formData.get('password') || null
+  };
+
+  try {
+    if (userId) {
+      await window.electronAPI.updateUser(userId, userData);
+      showSuccess('User updated successfully');
+    } else {
+      await window.electronAPI.createUser(userData);
+      showSuccess('User created successfully');
+    }
+    closeModal('user-modal');
+    loadUsers();
+  } catch (error) {
+    showError('Error saving user: ' + error.message);
+  }
+}
+
+function openAppointmentModal(appointmentId = null) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'appointment-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>${appointmentId ? 'Edit' : 'Schedule'} Appointment</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="appointment-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="appointment-patient">Patient *</label>
+            <select id="appointment-patient" name="patientId" required>
+              <option value="">Select Patient</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="appointment-doctor">Doctor *</label>
+            <select id="appointment-doctor" name="doctorId" required>
+              <option value="">Select Doctor</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="appointment-date">Date & Time *</label>
+            <input type="datetime-local" id="appointment-date" name="appointmentDate" required
+                   value="${new Date().toISOString().slice(0, 16)}">
+          </div>
+          <div class="form-group">
+            <label for="appointment-type">Type *</label>
+            <select id="appointment-type" name="appointmentType" required>
+              <option value="">Select Type</option>
+              <option value="consultation">Consultation</option>
+              <option value="follow-up">Follow-up</option>
+              <option value="surgery">Surgery</option>
+              <option value="therapy">Therapy</option>
+              <option value="assessment">Assessment</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="appointment-status">Status *</label>
+            <select id="appointment-status" name="status" required>
+              <option value="scheduled">Scheduled</option>
+              <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="no-show">No Show</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="appointment-notes">Notes</label>
+            <textarea id="appointment-notes" name="notes" rows="3" placeholder="Appointment notes"></textarea>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('appointment-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">${appointmentId ? 'Update' : 'Schedule'} Appointment</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load patients and doctors
+  loadPatientsForAppointment();
+  loadDoctorsForAppointment();
+
+  // Load data if editing
+  if (appointmentId) {
+    loadAppointmentForEdit(appointmentId);
+  }
+
+  // Add form submit handler
+    modal.querySelector('#appointment-form').addEventListener('submit', handleAppointmentSubmit);
+
+  // Close modal functionality - ensure proper event delegation
+    modal.querySelector('.modal-close').addEventListener('click', () => {
+      modal.remove();
+    });
+  
+    // Add click outside to close
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.remove();
+      }
+    });
+  
+    // Add keyboard escape to close
+    modal.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        modal.remove();
+      }
+    });
 }
 
 // Workflow Automation Functions
@@ -1559,11 +2035,737 @@ async function loadFinancialReports() {
 }
 
 function openInvoiceModal() {
-  showError('Invoice modal not implemented yet');
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'invoice-modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3>Create Invoice</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="invoice-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="invoice-patient">Patient *</label>
+            <select id="invoice-patient" name="patientId" required>
+              <option value="">Select Patient</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="invoice-due-date">Due Date *</label>
+            <input type="date" id="invoice-due-date" name="dueDate" required
+                   value="${new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="invoice-notes">Notes</label>
+          <textarea id="invoice-notes" name="notes" rows="2" placeholder="Invoice notes"></textarea>
+        </div>
+
+        <div class="invoice-items-section">
+          <h4>Invoice Items</h4>
+          <div id="invoice-items">
+            <div class="invoice-item" data-item-id="1">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Billing Code *</label>
+                  <select name="billingCodeId" required>
+                    <option value="">Select Billing Code</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Quantity *</label>
+                  <input type="number" name="quantity" min="1" value="1" required>
+                </div>
+                <div class="form-group">
+                  <label>Unit Price *</label>
+                  <input type="number" name="unitPrice" step="0.01" min="0" required>
+                </div>
+                <div class="form-group">
+                  <label>Total</label>
+                  <input type="number" name="totalPrice" step="0.01" readonly>
+                </div>
+                <div class="form-group">
+                  <button type="button" class="btn btn-danger btn-sm remove-item" style="margin-top: 24px;">Remove</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <button type="button" id="add-invoice-item" class="btn btn-secondary">Add Item</button>
+        </div>
+
+        <div class="invoice-totals">
+          <div class="total-row">
+            <strong>Subtotal: $<span id="invoice-subtotal">0.00</span></strong>
+          </div>
+          <div class="total-row">
+            <strong>Tax (15%): $<span id="invoice-tax">0.00</span></strong>
+          </div>
+          <div class="total-row">
+            <strong>Total: $<span id="invoice-total">0.00</span></strong>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('invoice-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Invoice</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load patients and billing codes
+  loadPatientsForInvoice();
+  loadBillingCodesForInvoice();
+
+  // Add form submit handler
+  modal.querySelector('#invoice-form').addEventListener('submit', handleInvoiceSubmit);
+
+  // Add item management
+  setupInvoiceItemManagement(modal);
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
-function openExpenseModal() {
-  showError('Expense modal not implemented yet');
+async function loadPatientsForInvoice() {
+  try {
+    const patients = await window.electronAPI.getPatients();
+    const select = document.getElementById('invoice-patient');
+
+    patients.forEach(patient => {
+      const option = document.createElement('option');
+      option.value = patient.id;
+      option.textContent = `${patient.patient_id} - ${patient.first_name} ${patient.last_name}`;
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading patients for invoice:', error);
+  }
+}
+
+async function loadBillingCodesForInvoice() {
+  try {
+    const billingCodes = await window.electronAPI.getBillingCodes({ active: true });
+    const selects = document.querySelectorAll('#invoice-items select[name="billingCodeId"]');
+
+    selects.forEach(select => {
+      select.innerHTML = '<option value="">Select Billing Code</option>';
+      billingCodes.forEach(code => {
+        const option = document.createElement('option');
+        option.value = code.id;
+        option.textContent = `${code.code} - ${code.description} ($${code.default_price.toFixed(2)})`;
+        option.dataset.price = code.default_price;
+        option.dataset.taxRate = code.tax_rate;
+        select.appendChild(option);
+      });
+    });
+  } catch (error) {
+    console.error('Error loading billing codes for invoice:', error);
+  }
+}
+
+function setupInvoiceItemManagement(modal) {
+  const itemsContainer = modal.querySelector('#invoice-items');
+  const addItemBtn = modal.querySelector('#add-invoice-item');
+
+  addItemBtn.addEventListener('click', () => {
+    const itemCount = itemsContainer.children.length + 1;
+    const itemHtml = `
+      <div class="invoice-item" data-item-id="${itemCount}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Billing Code *</label>
+            <select name="billingCodeId" required>
+              <option value="">Select Billing Code</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Quantity *</label>
+            <input type="number" name="quantity" min="1" value="1" required>
+          </div>
+          <div class="form-group">
+            <label>Unit Price *</label>
+            <input type="number" name="unitPrice" step="0.01" min="0" required>
+          </div>
+          <div class="form-group">
+            <label>Total</label>
+            <input type="number" name="totalPrice" step="0.01" readonly>
+          </div>
+          <div class="form-group">
+            <button type="button" class="btn btn-danger btn-sm remove-item" style="margin-top: 24px;">Remove</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    itemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+
+    // Load billing codes for new item
+    loadBillingCodesForInvoice();
+
+    // Add event listeners for new item
+    const newItem = itemsContainer.lastElementChild;
+    setupItemEventListeners(newItem);
+  });
+
+  // Setup event listeners for existing items
+  itemsContainer.querySelectorAll('.invoice-item').forEach(setupItemEventListeners);
+
+  function setupItemEventListeners(item) {
+    const billingCodeSelect = item.querySelector('select[name="billingCodeId"]');
+    const quantityInput = item.querySelector('input[name="quantity"]');
+    const unitPriceInput = item.querySelector('input[name="unitPrice"]');
+    const totalInput = item.querySelector('input[name="totalPrice"]');
+    const removeBtn = item.querySelector('.remove-item');
+
+    billingCodeSelect.addEventListener('change', (e) => {
+      const selectedOption = e.target.selectedOptions[0];
+      if (selectedOption && selectedOption.dataset.price) {
+        unitPriceInput.value = selectedOption.dataset.price;
+        calculateItemTotal(item);
+      }
+    });
+
+    quantityInput.addEventListener('input', () => calculateItemTotal(item));
+    unitPriceInput.addEventListener('input', () => calculateItemTotal(item));
+
+    removeBtn.addEventListener('click', () => {
+      if (itemsContainer.children.length > 1) {
+        item.remove();
+        calculateInvoiceTotals();
+      } else {
+        showError('Invoice must have at least one item');
+      }
+    });
+  }
+
+  function calculateItemTotal(item) {
+    const quantity = parseFloat(item.querySelector('input[name="quantity"]').value) || 0;
+    const unitPrice = parseFloat(item.querySelector('input[name="unitPrice"]').value) || 0;
+    const total = quantity * unitPrice;
+    item.querySelector('input[name="totalPrice"]').value = total.toFixed(2);
+    calculateInvoiceTotals();
+  }
+}
+
+function calculateInvoiceTotals() {
+  const items = document.querySelectorAll('.invoice-item');
+  let subtotal = 0;
+
+  items.forEach(item => {
+    const total = parseFloat(item.querySelector('input[name="totalPrice"]').value) || 0;
+    subtotal += total;
+  });
+
+  const tax = subtotal * 0.15;
+  const total = subtotal + tax;
+
+  document.getElementById('invoice-subtotal').textContent = subtotal.toFixed(2);
+  document.getElementById('invoice-tax').textContent = tax.toFixed(2);
+  document.getElementById('invoice-total').textContent = total.toFixed(2);
+}
+
+async function handleInvoiceSubmit(e) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const items = [];
+
+  // Collect invoice items
+  document.querySelectorAll('.invoice-item').forEach(item => {
+    const billingCodeSelect = item.querySelector('select[name="billingCodeId"]');
+    const billingCodeId = billingCodeSelect.value;
+    const quantity = parseInt(item.querySelector('input[name="quantity"]').value);
+    const unitPrice = parseFloat(item.querySelector('input[name="unitPrice"]').value);
+    const totalPrice = parseFloat(item.querySelector('input[name="totalPrice"]').value);
+
+    if (billingCodeId && quantity && unitPrice) {
+      const selectedOption = billingCodeSelect.selectedOptions[0];
+      const description = selectedOption ? selectedOption.textContent.split(' - ')[1].split(' (')[0] : 'Service';
+
+      items.push({
+        billingCodeId: parseInt(billingCodeId),
+        description: description,
+        quantity: quantity,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice
+      });
+    }
+  });
+
+  if (items.length === 0) {
+    showError('Invoice must have at least one item');
+    return;
+  }
+
+  const invoiceData = {
+    patientId: parseInt(formData.get('patientId')),
+    amount: parseFloat(document.getElementById('invoice-subtotal').textContent),
+    taxAmount: parseFloat(document.getElementById('invoice-tax').textContent),
+    totalAmount: parseFloat(document.getElementById('invoice-total').textContent),
+    dueDate: formData.get('dueDate'),
+    notes: formData.get('notes'),
+    items: items
+  };
+
+  try {
+    await window.electronAPI.createInvoice(invoiceData);
+    showSuccess('Invoice created successfully');
+    closeModal('invoice-modal');
+    loadInvoices();
+  } catch (error) {
+    showError('Error creating invoice: ' + error.message);
+  }
+}
+
+function openExpenseModal(expenseId = null) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'expense-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>${expenseId ? 'Edit' : 'Add'} Expense</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="expense-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="expense-description">Description *</label>
+            <input type="text" id="expense-description" name="description" required placeholder="Expense description">
+          </div>
+          <div class="form-group">
+            <label for="expense-category">Category *</label>
+            <select id="expense-category" name="category" required>
+              <option value="">Select Category</option>
+              <option value="Office Supplies">Office Supplies</option>
+              <option value="Medical Equipment">Medical Equipment</option>
+              <option value="Utilities">Utilities</option>
+              <option value="Rent">Rent</option>
+              <option value="Insurance">Insurance</option>
+              <option value="Marketing">Marketing</option>
+              <option value="Salaries">Salaries</option>
+              <option value="Training">Training</option>
+              <option value="Maintenance">Maintenance</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="expense-amount">Amount *</label>
+            <input type="number" id="expense-amount" name="amount" step="0.01" min="0" required placeholder="0.00">
+          </div>
+          <div class="form-group">
+            <label for="expense-date">Expense Date *</label>
+            <input type="date" id="expense-date" name="expenseDate" required value="${new Date().toISOString().split('T')[0]}">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="expense-vendor">Vendor</label>
+            <input type="text" id="expense-vendor" name="vendor" placeholder="Vendor name">
+          </div>
+          <div class="form-group">
+            <label for="expense-receipt">Receipt Path</label>
+            <input type="text" id="expense-receipt" name="receiptPath" placeholder="Path to receipt file">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="expense-notes">Notes</label>
+          <textarea id="expense-notes" name="notes" rows="2" placeholder="Additional notes"></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('expense-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">${expenseId ? 'Update' : 'Add'} Expense</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load data if editing
+  if (expenseId) {
+    loadExpenseForEdit(expenseId);
+  }
+
+  // Add form submit handler
+  modal.querySelector('#expense-form').addEventListener('submit', (e) => handleExpenseSubmit(e, expenseId));
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+async function loadBillingCodes() {
+  try {
+    const billingCodes = await window.electronAPI.getBillingCodes();
+    renderBillingCodesTable(billingCodes);
+  } catch (error) {
+    console.error('Error loading billing codes:', error);
+  }
+}
+
+function renderBillingCodesTable(billingCodes) {
+  const tbody = document.getElementById('billing-codes-tbody');
+  tbody.innerHTML = '';
+
+  billingCodes.forEach(code => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${code.code}</td>
+      <td>${code.description}</td>
+      <td>${code.category}</td>
+      <td>$${code.default_price.toFixed(2)}</td>
+      <td><span class="status-${code.active ? 'active' : 'inactive'}">${code.active ? 'Active' : 'Inactive'}</span></td>
+      <td>
+        <button class="action-btn edit" onclick="editBillingCode(${code.id})">Edit</button>
+        <button class="action-btn delete" onclick="deleteBillingCode(${code.id})"
+                ${currentUser.role !== 'admin' ? 'style="display: none;"' : ''}>Delete</button>
+      </td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+async function loadPayments() {
+  try {
+    const payments = await window.electronAPI.getPayments();
+    renderPaymentsTable(payments);
+  } catch (error) {
+    console.error('Error loading payments:', error);
+  }
+}
+
+function renderPaymentsTable(payments) {
+  const tbody = document.getElementById('payments-tbody');
+  tbody.innerHTML = '';
+
+  payments.forEach(payment => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${new Date(payment.payment_date).toLocaleDateString()}</td>
+      <td>${payment.invoice_number}</td>
+      <td>${payment.first_name} ${payment.last_name}</td>
+      <td>$${payment.amount.toFixed(2)}</td>
+      <td>${payment.payment_method}</td>
+      <td>${payment.reference_number || ''}</td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+
+function openBillingCodeModal(billingCodeId = null) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'billing-code-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>${billingCodeId ? 'Edit' : 'Add'} Billing Code</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="billing-code-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="billing-code">Code *</label>
+            <input type="text" id="billing-code" name="code" required placeholder="e.g., CONSULT">
+          </div>
+          <div class="form-group">
+            <label for="billing-category">Category *</label>
+            <select id="billing-category" name="category" required>
+              <option value="">Select Category</option>
+              <option value="Consultation">Consultation</option>
+              <option value="Diagnostic">Diagnostic</option>
+              <option value="Therapy">Therapy</option>
+              <option value="Emergency">Emergency</option>
+              <option value="Preventive">Preventive</option>
+              <option value="Medication">Medication</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="billing-description">Description *</label>
+          <input type="text" id="billing-description" name="description" required placeholder="Brief description of the service">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="billing-price">Default Price *</label>
+            <input type="number" id="billing-price" name="defaultPrice" step="0.01" min="0" required placeholder="0.00">
+          </div>
+          <div class="form-group">
+            <label for="billing-tax-rate">Tax Rate (%)</label>
+            <input type="number" id="billing-tax-rate" name="taxRate" step="0.01" min="0" max="100" value="15.00" placeholder="15.00">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="billing-active" name="active" checked> Active
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('billing-code-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Billing Code</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load data if editing
+  if (billingCodeId) {
+    loadBillingCodeForEdit(billingCodeId);
+  }
+
+  // Add form submit handler
+  modal.querySelector('#billing-code-form').addEventListener('submit', handleBillingCodeSubmit);
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+async function loadBillingCodeForEdit(billingCodeId) {
+  try {
+    const billingCodes = await window.electronAPI.getBillingCodes();
+    const code = billingCodes.find(c => c.id === billingCodeId);
+    if (code) {
+      document.getElementById('billing-code').value = code.code;
+      document.getElementById('billing-description').value = code.description;
+      document.getElementById('billing-category').value = code.category;
+      document.getElementById('billing-price').value = code.default_price;
+      document.getElementById('billing-tax-rate').value = (code.tax_rate * 100).toFixed(2);
+      document.getElementById('billing-active').checked = code.active === 1;
+
+      // Store ID for update
+      document.getElementById('billing-code-form').dataset.billingCodeId = billingCodeId;
+    }
+  } catch (error) {
+    console.error('Error loading billing code:', error);
+  }
+}
+
+async function handleBillingCodeSubmit(e) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const billingCodeData = {
+    code: formData.get('code'),
+    description: formData.get('description'),
+    category: formData.get('category'),
+    defaultPrice: parseFloat(formData.get('defaultPrice')),
+    taxRate: parseFloat(formData.get('taxRate')) / 100,
+    active: formData.has('active')
+  };
+
+  try {
+    const isEdit = e.target.dataset.billingCodeId;
+    if (isEdit) {
+      await window.electronAPI.updateBillingCode(parseInt(isEdit), billingCodeData);
+      showSuccess('Billing code updated successfully');
+    } else {
+      await window.electronAPI.createBillingCode(billingCodeData);
+      showSuccess('Billing code created successfully');
+    }
+    closeModal('billing-code-modal');
+    loadBillingCodes();
+  } catch (error) {
+    showError('Error saving billing code: ' + error.message);
+  }
+}
+
+function openPaymentModal() {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'payment-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Record Payment</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="payment-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="payment-invoice">Invoice *</label>
+            <select id="payment-invoice" name="invoiceId" required>
+              <option value="">Select Invoice</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="payment-amount">Amount *</label>
+            <input type="number" id="payment-amount" name="amount" step="0.01" min="0" required placeholder="0.00">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="payment-date">Payment Date *</label>
+            <input type="date" id="payment-date" name="paymentDate" required value="${new Date().toISOString().split('T')[0]}">
+          </div>
+          <div class="form-group">
+            <label for="payment-method">Payment Method *</label>
+            <select id="payment-method" name="paymentMethod" required>
+              <option value="">Select Method</option>
+              <option value="cash">Cash</option>
+              <option value="card">Card</option>
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="check">Check</option>
+              <option value="insurance">Insurance</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="payment-reference">Reference Number</label>
+          <input type="text" id="payment-reference" name="referenceNumber" placeholder="Check #, Transaction ID, etc.">
+        </div>
+        <div class="form-group">
+          <label for="payment-notes">Notes</label>
+          <textarea id="payment-notes" name="notes" rows="2" placeholder="Additional notes"></textarea>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('payment-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Record Payment</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load unpaid/overdue invoices
+  loadInvoicesForPayment();
+
+  // Add form submit handler
+  modal.querySelector('#payment-form').addEventListener('submit', handlePaymentSubmit);
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+async function loadInvoicesForPayment() {
+  try {
+    const invoices = await window.electronAPI.getInvoices({ status: ['unpaid', 'overdue', 'partial'] });
+    const select = document.getElementById('payment-invoice');
+
+    invoices.forEach(invoice => {
+      const option = document.createElement('option');
+      option.value = invoice.id;
+      option.textContent = `${invoice.invoice_number} - ${invoice.first_name} ${invoice.last_name} ($${invoice.total_amount.toFixed(2)})`;
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading invoices for payment:', error);
+  }
+}
+
+async function handlePaymentSubmit(e) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const paymentData = {
+    invoiceId: parseInt(formData.get('invoiceId')),
+    amount: parseFloat(formData.get('amount')),
+    paymentDate: formData.get('paymentDate'),
+    paymentMethod: formData.get('paymentMethod'),
+    referenceNumber: formData.get('referenceNumber') || null,
+    notes: formData.get('notes') || null
+  };
+
+  try {
+    await window.electronAPI.recordPayment(paymentData);
+    showSuccess('Payment recorded successfully');
+    closeModal('payment-modal');
+    loadPayments();
+    loadInvoices(); // Refresh invoices to show updated status
+  } catch (error) {
+    showError('Error recording payment: ' + error.message);
+  }
+}
+
+async function createInvoiceFromAppointment(appointmentId) {
+  if (!confirm('Create an invoice for this appointment?')) {
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.generateInvoiceFromAppointment(appointmentId);
+    showSuccess(`Invoice ${result.invoiceNumber} created successfully`);
+    loadAppointments(); // Refresh to show updated billing status
+    loadInvoices(); // Refresh invoices list
+  } catch (error) {
+    showError('Error creating invoice: ' + error.message);
+  }
+}
+
+async function clearAllInvoices() {
+  if (!confirm('Are you sure you want to delete ALL invoices, payments, and related billing data? This action cannot be undone.')) {
+    return;
+  }
+
+  if (!confirm('This will permanently delete all invoice data. Are you absolutely sure?')) {
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.clearInvoices();
+    showSuccess(result.message);
+    loadInvoices(); // Refresh the invoices list
+    loadPayments(); // Refresh payments list
+    loadFinancialReports(); // Refresh financial stats
+    loadDashboard(); // Refresh dashboard to update financial stats display
+  } catch (error) {
+    showError('Error clearing invoices: ' + error.message);
+  }
 }
 
 // Admin functions
@@ -1622,21 +2824,142 @@ function renderAuditTable(logs) {
   });
 }
 
-function openUserModal() {
-  showError('User modal not implemented yet');
+window.openUserModal = function(userId = null) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'user-modal';
+  modal.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>${userId ? 'Edit' : 'Add'} User</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="user-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="user-username">Username *</label>
+            <input type="text" id="user-username" name="username" required placeholder="Username">
+          </div>
+          <div class="form-group">
+            <label for="user-name">Full Name *</label>
+            <input type="text" id="user-name" name="name" required placeholder="Full name">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="user-email">Email</label>
+            <input type="email" id="user-email" name="email" placeholder="user@example.com">
+          </div>
+          <div class="form-group">
+            <label for="user-phone">Phone</label>
+            <input type="tel" id="user-phone" name="phone" placeholder="Phone number">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="user-role">Role *</label>
+            <select id="user-role" name="role" required>
+              <option value="">Select Role</option>
+              <option value="admin">Administrator</option>
+              <option value="doctor">Doctor</option>
+              <option value="receptionist">Receptionist</option>
+              <option value="accountant">Accountant</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="user-password">Password ${userId ? '(leave blank to keep current)' : '*'}</label>
+            <input type="password" id="user-password" name="password" ${userId ? '' : 'required'} placeholder="Password">
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('user-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">${userId ? 'Update' : 'Create'} User</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load data if editing
+  if (userId) {
+    loadUserForEdit(userId);
+  }
+
+  // Add form submit handler
+  modal.querySelector('#user-form').addEventListener('submit', (e) => handleUserSubmit(e, userId));
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
-function createBackup() {
-  showError('Backup functionality not implemented yet');
+async function createBackup() {
+  try {
+    const result = await window.electronAPI.createBackup();
+    if (result.success) {
+      const fileName = result.path.split(/[/\\]/).pop();
+      showSuccess(`Backup created successfully: ${fileName}`);
+      // Update backup status
+      document.getElementById('backup-status').innerHTML = `
+        <i class="fas fa-check-circle"></i>
+        <span>Last backup: ${new Date().toLocaleString()}</span>
+      `;
+    } else {
+      showError('Failed to create backup');
+    }
+  } catch (error) {
+    showError('Error creating backup: ' + error.message);
+  }
 }
 
-function restoreBackup() {
-  showError('Restore functionality not implemented yet');
+async function restoreBackup() {
+  if (!confirm('Are you sure you want to restore from backup? This will replace all current data.')) {
+    return;
+  }
+
+  if (!confirm('This action cannot be undone. All current data will be lost. Continue?')) {
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.restoreBackup();
+    if (result && result.success) {
+      showSuccess('Database restored successfully. The application will restart.');
+      // Reload the app
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+    } else {
+      showError('Restore cancelled or failed');
+    }
+  } catch (error) {
+    showError('Error restoring backup: ' + error.message);
+  }
 }
 
 // Utility functions
 function closeModal(modalId) {
-  document.getElementById(modalId).classList.remove('active');
+  const modal = document.getElementById(modalId);
+  if (modal) {
+    modal.classList.remove('active');
+    // Remove modal from DOM after transition
+    setTimeout(() => {
+      if (modal && !modal.classList.contains('active')) {
+        modal.remove();
+      }
+    }, 300);
+  }
 }
 
 function showError(message) {
@@ -1670,6 +2993,48 @@ function debounce(func, wait) {
   };
 }
 
+// Global Error Handling
+(function setupGlobalErrorHandling() {
+  // Handle unhandled promise rejections
+  window.addEventListener('unhandledrejection', (event) => {
+    console.error('Unhandled promise rejection:', event.reason);
+    showError('An unexpected error occurred. Please try again.');
+    event.preventDefault(); // Prevent default browser behavior
+  });
+
+  // Handle global errors
+  window.addEventListener('error', (event) => {
+    console.error('Global error:', event.error);
+    if (!event.error.message.includes('ResizeObserver')) {
+      showError('An unexpected error occurred. Please try again.');
+    }
+  });
+
+  // Add error boundary for components
+  window.withErrorBoundary = function(component) {
+    try {
+      return component();
+    } catch (error) {
+      console.error('Component error:', error);
+      return createErrorComponent(error);
+    }
+  };
+
+  // Create error component
+  function createErrorComponent(error) {
+    const container = document.createElement('div');
+    container.className = 'error-boundary';
+    container.innerHTML = `
+      <div class="error-message">
+        <h3>Something went wrong</h3>
+        <p>${error.message || 'An unexpected error occurred'}</p>
+        <button onclick="window.location.reload()">Reload Page</button>
+      </div>
+    `;
+    return container;
+  }
+})();
+
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
   // Only handle shortcuts when not typing in input fields
@@ -1677,93 +3042,517 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl/Cmd key combinations
-  if (e.ctrlKey || e.metaKey) {
-    switch (e.key.toLowerCase()) {
-      case 'n':
-        e.preventDefault();
-        if (currentScreen === 'patients') {
-          openPatientModal();
-        }
-        break;
-      case 'f':
-        e.preventDefault();
-        const searchInput = document.getElementById('patient-search');
-        if (searchInput) {
-          searchInput.focus();
-        }
-        break;
-      case 's':
-        e.preventDefault();
-        // Quick save current form if open
-        const activeForm = document.querySelector('form.active, #patient-form');
-        if (activeForm) {
-          const submitBtn = activeForm.querySelector('button[type="submit"]');
-          if (submitBtn && !submitBtn.disabled) {
-            submitBtn.click();
+  try {
+    // Ctrl/Cmd key combinations
+    if (e.ctrlKey || e.metaKey) {
+      switch (e.key.toLowerCase()) {
+        case 'n':
+          e.preventDefault();
+          handleNewRecordShortcut();
+          break;
+        case 'f':
+          e.preventDefault();
+          focusSearchField();
+          break;
+        case 's':
+          e.preventDefault();
+          saveCurrentForm();
+          break;
+        case 'e':
+          e.preventDefault();
+          handleEditShortcut();
+          break;
+        case 'd':
+          e.preventDefault();
+          handleDeleteShortcut();
+          break;
+        case 'b':
+          e.preventDefault();
+          handleBulkOperationsShortcut();
+          break;
+        case 'p':
+          e.preventDefault();
+          handlePrintShortcut();
+          break;
+        case 'escape':
+          e.preventDefault();
+          // Close modals or go back
+          const activeModal = document.querySelector('.modal.active');
+          if (activeModal) {
+            closeModal(activeModal.id);
           }
-        }
-        break;
-      case 'escape':
-        e.preventDefault();
-        // Close modals or go back
-        const activeModal = document.querySelector('.modal.active');
-        if (activeModal) {
-          closeModal(activeModal.id);
-        }
-        break;
-    }
-  }
-
-  // Alt key combinations
-  if (e.altKey) {
-    switch (e.key.toLowerCase()) {
-      case '1':
-        e.preventDefault();
-        switchScreen('dashboard');
-        break;
-      case '2':
-        e.preventDefault();
-        switchScreen('patients');
-        break;
-      case '3':
-        e.preventDefault();
-        switchScreen('appointments');
-        break;
-      case '4':
-        e.preventDefault();
-        switchScreen('accounting');
-        break;
-      case '5':
-        e.preventDefault();
-        switchScreen('admin');
-        break;
-    }
-  }
-
-  // Function keys
-  switch (e.key) {
-    case 'F1':
-      e.preventDefault();
-      showKeyboardShortcutsHelp();
-      break;
-    case 'F5':
-      e.preventDefault();
-      // Refresh current screen data
-      switch (currentScreen) {
-        case 'dashboard':
-          loadDashboard();
-          break;
-        case 'patients':
-          loadPatients();
-          break;
-        case 'appointments':
-          loadAppointments();
           break;
       }
-      break;
+    }
+
+    // Alt key combinations
+    if (e.altKey) {
+      switch (e.key.toLowerCase()) {
+        case '1':
+          e.preventDefault();
+          switchScreen('dashboard');
+          break;
+        case '2':
+          e.preventDefault();
+          switchScreen('patients');
+          break;
+        case '3':
+          e.preventDefault();
+          switchScreen('appointments');
+          break;
+        case '4':
+          e.preventDefault();
+          switchScreen('accounting');
+          break;
+        case '5':
+          e.preventDefault();
+          switchScreen('admin');
+          break;
+        case 'i':
+          e.preventDefault();
+          handleInvoiceShortcut();
+          break;
+        case 'r':
+          e.preventDefault();
+          handleReportShortcut();
+          break;
+        case 'u':
+          e.preventDefault();
+          handleUserShortcut();
+          break;
+      }
+    }
+
+    // Function keys
+    switch (e.key) {
+      case 'F1':
+        e.preventDefault();
+        showKeyboardShortcutsHelp();
+        break;
+      case 'F2':
+        e.preventDefault();
+        handleRenameShortcut();
+        break;
+      case 'F3':
+        e.preventDefault();
+        handleSearchShortcut();
+        break;
+      case 'F5':
+        e.preventDefault();
+        // Refresh current screen data
+        refreshCurrentScreen();
+        break;
+      case 'F12':
+        e.preventDefault();
+        toggleSidebar();
+        break;
+    }
+
+    // Shift combinations
+    if (e.shiftKey) {
+      switch (e.key.toLowerCase()) {
+        case 'f1':
+          e.preventDefault();
+          showAdvancedHelp();
+          break;
+        case 'f5':
+          e.preventDefault();
+          forceRefresh();
+          break;
+      }
+    }
+  } catch (error) {
+    console.error('Keyboard shortcut error:', error);
+    showWarning('An error occurred while processing keyboard shortcut: ' + error.message);
   }
 });
+
+// Helper functions for keyboard shortcuts
+function handleNewRecordShortcut() {
+  try {
+    if (!currentScreen) {
+      showWarning('No active screen to create record for');
+      return;
+    }
+
+    switch (currentScreen) {
+      case 'patients':
+        openPatientModal();
+        break;
+      case 'appointments':
+        openAppointmentModal();
+        break;
+      case 'accounting':
+        if (document.querySelector('#invoices-tab.active')) {
+          openInvoiceModal();
+        } else if (document.querySelector('#expenses-tab.active')) {
+          openExpenseModal();
+        } else if (document.querySelector('#billing-codes-tab.active')) {
+          openBillingCodeModal();
+        } else if (document.querySelector('#payments-tab.active')) {
+          openPaymentModal();
+        } else {
+          showWarning('Please select a specific tab in Accounting section');
+        }
+        break;
+      case 'admin':
+        if (document.querySelector('#users-tab.active')) {
+          openUserModal();
+        } else {
+          showWarning('Please select Users tab in Admin section');
+        }
+        break;
+      default:
+        showWarning('New record shortcut not available for this screen');
+    }
+  } catch (error) {
+    console.error('Error in handleNewRecordShortcut:', error);
+    showWarning('Failed to create new record: ' + error.message);
+  }
+}
+
+function focusSearchField() {
+  try {
+    let searchInput;
+    
+    switch (currentScreen) {
+      case 'patients':
+        searchInput = document.getElementById('patient-search');
+        break;
+      case 'appointments':
+        searchInput = document.getElementById('appointment-search');
+        break;
+      case 'accounting':
+        searchInput = document.getElementById('invoice-search');
+        break;
+      default:
+        searchInput = document.getElementById('patient-search');
+    }
+    
+    if (searchInput) {
+      searchInput.focus();
+      searchInput.select();
+    } else {
+      showWarning('Search field not found for current screen');
+    }
+  } catch (error) {
+    console.error('Error in focusSearchField:', error);
+    showWarning('Failed to focus search field: ' + error.message);
+  }
+}
+
+function saveCurrentForm() {
+  try {
+    const activeForm = document.querySelector('form.active, #patient-form, #appointment-form, #invoice-form, #expense-form, #billing-code-form, #payment-form, #user-form');
+    if (activeForm) {
+      const submitBtn = activeForm.querySelector('button[type="submit"]');
+      if (submitBtn && !submitBtn.disabled) {
+        submitBtn.click();
+      } else {
+        showWarning('Form is not ready to save or submit button is disabled');
+      }
+    } else {
+      showWarning('No active form found to save');
+    }
+  } catch (error) {
+    console.error('Error in saveCurrentForm:', error);
+    showWarning('Failed to save form: ' + error.message);
+  }
+}
+
+function handleEditShortcut() {
+  const selectedItems = document.querySelectorAll('.patient-checkbox:checked, .appointment-checkbox:checked, .invoice-checkbox:checked');
+  if (selectedItems.length === 1) {
+    const itemId = selectedItems[0].dataset.patientId || selectedItems[0].dataset.appointmentId || selectedItems[0].dataset.invoiceId;
+    if (itemId) {
+      switch (currentScreen) {
+        case 'patients':
+          openPatientModal(itemId);
+          break;
+        case 'appointments':
+          openAppointmentModal(itemId);
+          break;
+        case 'accounting':
+          if (document.querySelector('#invoices-tab.active')) {
+            editInvoice(itemId);
+          } else if (document.querySelector('#expenses-tab.active')) {
+            editExpense(itemId);
+          } else if (document.querySelector('#billing-codes-tab.active')) {
+            editBillingCode(itemId);
+          }
+          break;
+      }
+    }
+  } else if (selectedItems.length > 1) {
+    showWarning('Please select only one item to edit');
+  } else {
+    showWarning('Please select an item to edit');
+  }
+}
+
+function handleDeleteShortcut() {
+  const selectedItems = document.querySelectorAll('.patient-checkbox:checked, .appointment-checkbox:checked, .invoice-checkbox:checked');
+  if (selectedItems.length > 0) {
+    const itemIds = Array.from(selectedItems).map(item => item.dataset.patientId || item.dataset.appointmentId || item.dataset.invoiceId);
+    const itemType = currentScreen === 'patients' ? 'patient' : currentScreen === 'appointments' ? 'appointment' : 'invoice';
+    
+    if (confirm(`Are you sure you want to delete ${selectedItems.length} ${itemType}${selectedItems.length > 1 ? 's' : ''}?`)) {
+      itemIds.forEach(id => {
+        switch (currentScreen) {
+          case 'patients':
+            deletePatientRecord(id);
+            break;
+          case 'appointments':
+            deleteAppointment(id);
+            break;
+          case 'accounting':
+            if (document.querySelector('#invoices-tab.active')) {
+              deleteInvoice(id);
+            } else if (document.querySelector('#expenses-tab.active')) {
+              deleteExpense(id);
+            }
+            break;
+        }
+      });
+    }
+  } else {
+    showWarning('Please select items to delete');
+  }
+}
+
+function handleBulkOperationsShortcut() {
+  if (currentScreen === 'patients') {
+    const selectedCount = document.querySelectorAll('.patient-checkbox:checked').length;
+    if (selectedCount > 0) {
+      // Show bulk operations menu
+      const bulkControls = document.getElementById('bulk-selection-controls');
+      if (bulkControls) {
+        bulkControls.style.display = 'flex';
+      }
+    } else {
+      showWarning('Please select patients for bulk operations');
+    }
+  } else {
+    showWarning('Bulk operations are only available for patients');
+  }
+}
+
+function handlePrintShortcut() {
+  switch (currentScreen) {
+    case 'patients':
+      bulkPrintLabels();
+      break;
+    case 'appointments':
+      printAppointmentSchedule();
+      break;
+    case 'accounting':
+      printFinancialReport();
+      break;
+    default:
+      window.print();
+  }
+}
+
+function handleInvoiceShortcut() {
+  if (currentScreen === 'accounting') {
+    openInvoiceModal();
+  } else {
+    showWarning('Invoice creation is only available in the Accounting section');
+  }
+}
+
+function handleReportShortcut() {
+  if (currentScreen === 'accounting') {
+    switchTab('accounting', 'reports');
+  } else {
+    showWarning('Reports are only available in the Accounting section');
+  }
+}
+
+function handleUserShortcut() {
+  if (currentScreen === 'admin') {
+    openUserModal();
+  } else {
+    showWarning('User management is only available in the Admin section');
+  }
+}
+
+function handleRenameShortcut() {
+  // For renaming selected items
+  const selectedItems = document.querySelectorAll('.patient-checkbox:checked, .appointment-checkbox:checked');
+  if (selectedItems.length === 1) {
+    const itemId = selectedItems[0].dataset.patientId || selectedItems[0].dataset.appointmentId;
+    if (itemId) {
+      switch (currentScreen) {
+        case 'patients':
+          openPatientModal(itemId);
+          break;
+        case 'appointments':
+          openAppointmentModal(itemId);
+          break;
+      }
+    }
+  }
+}
+
+function handleSearchShortcut() {
+  focusSearchField();
+}
+
+function refreshCurrentScreen() {
+  switch (currentScreen) {
+    case 'dashboard':
+      loadDashboard();
+      break;
+    case 'patients':
+      loadPatients('', {}, true); // Force refresh for patients
+      break;
+    case 'appointments':
+      loadAppointments();
+      break;
+    case 'accounting':
+      loadInvoices();
+      break;
+    case 'admin':
+      loadUsers();
+      break;
+  }
+}
+
+function forceRefresh() {
+  // Force reload data and clear cache
+  clearExpiredCache();
+  if (currentScreen === 'patients') {
+    loadPatients('', {}, true); // Force refresh for patients
+  } else {
+    refreshCurrentScreen();
+  }
+}
+
+function showAdvancedHelp() {
+  // Show advanced help modal
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'advanced-help-modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 600px;">
+      <div class="modal-header">
+        <h3>Advanced Keyboard Shortcuts</h3>
+        <span class="modal-close">×</span>
+      </div>
+      <div class="help-content" style="padding: 1.5rem;">
+        <div class="help-section">
+          <h4>Navigation Shortcuts</h4>
+          <ul>
+            <li><kbd>Ctrl+Alt+1-5</kbd> - Switch screens with confirmation</li>
+            <li><kbd>Ctrl+Tab</kbd> - Switch between tabs in current screen</li>
+            <li><kbd>Ctrl+Shift+Tab</kbd> - Switch to previous tab</li>
+          </ul>
+        </div>
+        <div class="help-section">
+          <h4>Form Shortcuts</h4>
+          <ul>
+            <li><kbd>Ctrl+Enter</kbd> - Save current form</li>
+            <li><kbd>Ctrl+Shift+S</kbd> - Save and close form</li>
+            <li><kbd>Ctrl+Shift+N</kbd> - Create new record and keep form open</li>
+            <li><kbd>Ctrl+Shift+E</kbd> - Edit selected item</li>
+          </ul>
+        </div>
+        <div class="help-section">
+          <h4>Selection Shortcuts</h4>
+          <ul>
+            <li><kbd>Ctrl+A</kbd> - Select all items</li>
+            <li><kbd>Ctrl+Shift+A</kbd> - Deselect all items</li>
+            <li><kbd>Ctrl+Click</kbd> - Add/remove single item from selection</li>
+            <li><kbd>Shift+Click</kbd> - Select range of items</li>
+          </ul>
+        </div>
+        <div class="help-section">
+          <h4>Search Shortcuts</h4>
+          <ul>
+            <li><kbd>Ctrl+F</kbd> - Focus search field</li>
+            <li><kbd>Ctrl+Shift+F</kbd> - Open advanced search</li>
+            <li><kbd>Ctrl+G</kbd> - Find next search result</li>
+            <li><kbd>Ctrl+Shift+G</kbd> - Find previous search result</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+function showWarning(message) {
+  const warningDiv = document.createElement('div');
+  warningDiv.className = 'message warning';
+  warningDiv.textContent = message;
+  document.querySelector('.app-main').prepend(warningDiv);
+  setTimeout(() => warningDiv.remove(), 3000);
+}
+
+// Additional helper functions for missing features
+function deleteInvoice(id) {
+  if (confirm('Are you sure you want to delete this invoice?')) {
+    window.electronAPI.deleteInvoice(id).then(() => {
+      loadInvoices();
+      showSuccess('Invoice deleted successfully');
+    }).catch(error => {
+      showError('Error deleting invoice: ' + error.message);
+    });
+  }
+}
+
+function printAppointmentSchedule() {
+  const appointments = document.querySelectorAll('.data-table tbody tr');
+  if (appointments.length > 0) {
+    window.print();
+  } else {
+    showWarning('No appointments to print');
+  }
+}
+
+function printFinancialReport() {
+  if (currentScreen === 'accounting') {
+    const reportData = document.querySelector('.financial-reports-content');
+    if (reportData) {
+      window.print();
+    } else {
+      showWarning('No financial data to print');
+    }
+  }
+}
+
+// Test function for keyboard shortcuts (development only)
+function testKeyboardShortcuts() {
+  console.log('Testing keyboard shortcuts...');
+  
+  // Test basic navigation
+  console.log('Testing Alt+1 (Dashboard):');
+  const dashboardEvent = new KeyboardEvent('keydown', { altKey: true, key: '1' });
+  document.dispatchEvent(dashboardEvent);
+  
+  console.log('Testing Alt+2 (Patients):');
+  const patientsEvent = new KeyboardEvent('keydown', { altKey: true, key: '2' });
+  document.dispatchEvent(patientsEvent);
+  
+  console.log('Testing F1 (Help):');
+  const helpEvent = new KeyboardEvent('keydown', { key: 'F1' });
+  document.dispatchEvent(helpEvent);
+  
+  console.log('Keyboard shortcuts test completed. Check console for errors.');
+}
 
 // Guided Tours and Help System
 let currentTourStep = 0;
@@ -1799,9 +3588,11 @@ function showHelpMenu() {
           <h4><i class="fas fa-route"></i> Guided Tours</h4>
           <p>Take an interactive tour to learn about app features:</p>
           <div class="tour-options">
-            <button class="btn btn-primary" onclick="startTour('dashboard')">Dashboard Tour</button>
-            <button class="btn btn-primary" onclick="startTour('patients')">Patient Management Tour</button>
-            <button class="btn btn-primary" onclick="startTour('appointments')">Appointments Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('dashboard')">Dashboard Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('patients')">Patient Management Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('appointments')">Appointments Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('accounting')">Accounting Tour</button>
+            <button class="btn btn-primary" onclick="window.startTour('admin')">Admin Tour</button>
           </div>
         </div>
 
@@ -1832,11 +3623,23 @@ function showHelpMenu() {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 function startTour(tourType) {
   // Close help modal
   document.getElementById('help-modal')?.remove();
+
+  // Switch to appropriate screen
+  if (tourType !== 'dashboard') {
+    switchScreen(tourType);
+  }
 
   // Define tour steps based on type
   switch (tourType) {
@@ -1900,6 +3703,86 @@ function startTour(tourType) {
         }
       ];
       break;
+    case 'accounting':
+      tourSteps = [
+        {
+          element: '#accounting-screen',
+          title: 'Accounting Dashboard',
+          content: 'Welcome to the accounting section. Here you can manage invoices, track payments, and monitor your clinic\'s financial health.',
+          position: 'bottom'
+        },
+        {
+          element: '#add-invoice-btn',
+          title: 'Create New Invoices',
+          content: 'Click here to create new invoices for patient services. You can add multiple billing items and calculate taxes automatically.',
+          position: 'bottom'
+        },
+        {
+          element: '#invoices-tab',
+          title: 'Invoice Management',
+          content: 'View and manage all your invoices here. Track payment status, due dates, and outstanding balances.',
+          position: 'top'
+        },
+        {
+          element: '#billing-codes-tab',
+          title: 'Billing Codes',
+          content: 'Manage your billing codes and pricing. These codes are used when creating invoices and determine service pricing.',
+          position: 'top'
+        },
+        {
+          element: '#record-payment-btn',
+          title: 'Record Payments',
+          content: 'Record payments received from patients. You can track different payment methods and reference numbers.',
+          position: 'bottom'
+        },
+        {
+          element: '#reports-tab',
+          title: 'Financial Reports',
+          content: 'View comprehensive financial reports including revenue, expenses, and profit/loss statements.',
+          position: 'top'
+        }
+      ];
+      break;
+    case 'admin':
+      tourSteps = [
+        {
+          element: '#admin-screen',
+          title: 'Administration Panel',
+          content: 'This is the administration section where you can manage users, system settings, and perform maintenance tasks.',
+          position: 'bottom'
+        },
+        {
+          element: '#users-tab',
+          title: 'User Management',
+          content: 'Manage user accounts and permissions. You can add doctors, receptionists, accountants, and other staff members.',
+          position: 'top'
+        },
+        {
+          element: '#add-user-btn',
+          title: 'Add New Users',
+          content: 'Click here to add new users to the system. Set appropriate roles and permissions for each user type.',
+          position: 'bottom'
+        },
+        {
+          element: '#audit-tab',
+          title: 'Audit Log',
+          content: 'View the audit log to track all system activities. This helps with compliance and troubleshooting.',
+          position: 'top'
+        },
+        {
+          element: '#backup-btn',
+          title: 'Data Backup',
+          content: 'Regularly backup your data to prevent loss. You can also restore from previous backups if needed.',
+          position: 'bottom'
+        },
+        {
+          element: '#sync-tab',
+          title: 'Data Synchronization',
+          content: 'Configure settings for synchronizing data with external systems or cloud services.',
+          position: 'top'
+        }
+      ];
+      break;
   }
 
   currentTourStep = 0;
@@ -1944,34 +3827,114 @@ function showTourStep() {
 
   document.body.appendChild(overlay);
 
-  // Position tooltip
-  const tooltip = overlay.querySelector('.tour-tooltip');
-  const rect = element.getBoundingClientRect();
-
-  tooltip.style.position = 'fixed';
-  tooltip.style.zIndex = '10000';
-
-  switch (step.position) {
-    case 'top':
-      tooltip.style.left = rect.left + (rect.width / 2) - (tooltip.offsetWidth / 2) + 'px';
-      tooltip.style.top = rect.top - tooltip.offsetHeight - 10 + 'px';
-      break;
-    case 'bottom':
-      tooltip.style.left = rect.left + (rect.width / 2) - (tooltip.offsetWidth / 2) + 'px';
-      tooltip.style.top = rect.bottom + 10 + 'px';
-      break;
-    case 'left':
-      tooltip.style.left = rect.left - tooltip.offsetWidth - 10 + 'px';
-      tooltip.style.top = rect.top + (rect.height / 2) - (tooltip.offsetHeight / 2) + 'px';
-      break;
-    case 'right':
-      tooltip.style.left = rect.right + 10 + 'px';
-      tooltip.style.top = rect.top + (rect.height / 2) - (tooltip.offsetHeight / 2) + 'px';
-      break;
-  }
+  // Position tooltip after it's rendered
+  requestAnimationFrame(() => {
+    positionTourTooltip(overlay, element, step.position);
+  });
 
   // Highlight target element
   element.classList.add('tour-highlight');
+}
+
+function positionTourTooltip(overlay, element, preferredPosition) {
+  const tooltip = overlay.querySelector('.tour-tooltip');
+  const rect = element.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  
+  // Set initial position to center as fallback
+  let finalLeft = (viewportWidth - 300) / 2; // Default width
+  let finalTop = (viewportHeight - 200) / 2; // Default height
+  let finalPosition = 'center';
+
+  // Define position attempts in order of preference
+  const positionAttempts = [preferredPosition];
+
+  // Add fallback positions
+  switch (preferredPosition) {
+    case 'top':
+      positionAttempts.push('bottom', 'left', 'right', 'center');
+      break;
+    case 'bottom':
+      positionAttempts.push('top', 'left', 'right', 'center');
+      break;
+    case 'left':
+      positionAttempts.push('right', 'top', 'bottom', 'center');
+      break;
+    case 'right':
+      positionAttempts.push('left', 'top', 'bottom', 'center');
+      break;
+    default:
+      positionAttempts.push('top', 'bottom', 'left', 'right');
+      break;
+  }
+
+  // Try each position until one fits
+  for (const position of positionAttempts) {
+    // Force tooltip to be visible to measure its dimensions
+    tooltip.style.visibility = 'hidden';
+    tooltip.style.display = 'block';
+    tooltip.style.position = 'fixed';
+    tooltip.style.left = '0';
+    tooltip.style.top = '0';
+    
+    // Trigger reflow to get accurate dimensions
+    tooltip.offsetHeight;
+    
+    const tooltipRect = tooltip.getBoundingClientRect();
+    tooltip.style.visibility = 'visible';
+
+    let left, top;
+    const margin = 20;
+
+    switch (position) {
+      case 'top':
+        left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+        top = rect.top - tooltipRect.height - 10;
+        break;
+      case 'bottom':
+        left = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+        top = rect.bottom + 10;
+        break;
+      case 'left':
+        left = rect.left - tooltipRect.width - 10;
+        top = rect.top + (rect.height / 2) - (tooltipRect.height / 2);
+        break;
+      case 'right':
+        left = rect.right + 10;
+        top = rect.top + (rect.height / 2) - (tooltipRect.height / 2);
+        break;
+      case 'center':
+        left = (viewportWidth - tooltipRect.width) / 2;
+        top = (viewportHeight - tooltipRect.height) / 2;
+        break;
+    }
+
+    // Check if position fits within viewport with some margin
+    const fits = left >= margin &&
+                 top >= margin &&
+                 left + tooltipRect.width <= viewportWidth - margin &&
+                 top + tooltipRect.height <= viewportHeight - margin;
+
+    if (fits) {
+      finalPosition = position;
+      finalLeft = left;
+      finalTop = top;
+      break;
+    }
+  }
+
+  // Apply the position with bounds checking
+  const clampedLeft = Math.max(10, Math.min(finalLeft, viewportWidth - 320));
+  const clampedTop = Math.max(10, Math.min(finalTop, viewportHeight - 220));
+
+  tooltip.style.left = clampedLeft + 'px';
+  tooltip.style.top = clampedTop + 'px';
+  tooltip.style.position = 'fixed';
+  tooltip.style.zIndex = '10000';
+
+  // Update tooltip class for styling
+  tooltip.className = `tour-tooltip ${finalPosition}`;
 }
 
 function nextTourStep() {
@@ -2022,31 +3985,82 @@ function initializeContextualHelp() {
 // Show keyboard shortcuts help
 function showKeyboardShortcutsHelp() {
   const shortcuts = [
-    { keys: 'Ctrl+N', description: 'New Patient (on Patients screen)' },
-    { keys: 'Ctrl+F', description: 'Focus Search' },
-    { keys: 'Ctrl+S', description: 'Save Current Form' },
-    { keys: 'Ctrl+Esc', description: 'Close Modal' },
-    { keys: 'Alt+1-5', description: 'Switch to Dashboard/Patients/Appointments/Accounting/Admin' },
-    { keys: 'F1', description: 'Show This Help' },
-    { keys: 'F5', description: 'Refresh Current Screen' }
+    // Navigation Shortcuts
+    { category: 'Navigation', keys: 'Alt+1-5', description: 'Switch to Dashboard/Patients/Appointments/Accounting/Admin' },
+    { category: 'Navigation', keys: 'F12', description: 'Toggle Sidebar' },
+    { category: 'Navigation', keys: 'Ctrl+Tab', description: 'Switch to next tab' },
+    { category: 'Navigation', keys: 'Ctrl+Shift+Tab', description: 'Switch to previous tab' },
+    
+    // Basic Operations
+    { category: 'Basic Operations', keys: 'Ctrl+N', description: 'Create New Record (context-sensitive)' },
+    { category: 'Basic Operations', keys: 'Ctrl+E', description: 'Edit Selected Item' },
+    { category: 'Basic Operations', keys: 'Ctrl+D', description: 'Delete Selected Item(s)' },
+    { category: 'Basic Operations', keys: 'Ctrl+S', description: 'Save Current Form' },
+    { category: 'Basic Operations', keys: 'Ctrl+Esc', description: 'Close Modal/Dialog' },
+    
+    // Search and Filter
+    { category: 'Search & Filter', keys: 'Ctrl+F', description: 'Focus Search Field' },
+    { category: 'Search & Filter', keys: 'F3', description: 'Quick Search' },
+    { category: 'Search & Filter', keys: 'Ctrl+Shift+F', description: 'Open Advanced Search' },
+    
+    // Screen-Specific Shortcuts
+    { category: 'Patients', keys: 'Ctrl+N', description: 'Add New Patient' },
+    { category: 'Patients', keys: 'Ctrl+B', description: 'Bulk Operations' },
+    { category: 'Patients', keys: 'Ctrl+P', description: 'Print Patient Labels' },
+    
+    { category: 'Appointments', keys: 'Ctrl+N', description: 'Schedule New Appointment' },
+    { category: 'Appointments', keys: 'Ctrl+P', description: 'Print Appointment Schedule' },
+    
+    { category: 'Accounting', keys: 'Ctrl+N', description: 'Create New Invoice' },
+    { category: 'Accounting', keys: 'Alt+I', description: 'Create Invoice' },
+    { category: 'Accounting', keys: 'Alt+R', description: 'View Reports' },
+    { category: 'Accounting', keys: 'Ctrl+P', description: 'Print Financial Report' },
+    
+    { category: 'Admin', keys: 'Ctrl+N', description: 'Add New User' },
+    { category: 'Admin', keys: 'Alt+U', description: 'User Management' },
+    
+    // Advanced Shortcuts
+    { category: 'Advanced', keys: 'F1', description: 'Show Basic Help' },
+    { category: 'Advanced', keys: 'Shift+F1', description: 'Show Advanced Help' },
+    { category: 'Advanced', keys: 'F5', description: 'Refresh Current Screen' },
+    { category: 'Advanced', keys: 'Shift+F5', description: 'Force Refresh (Clear Cache)' },
+    { category: 'Advanced', keys: 'F2', description: 'Rename Selected Item' },
+    
+    // Selection Shortcuts
+    { category: 'Selection', keys: 'Ctrl+A', description: 'Select All Items' },
+    { category: 'Selection', keys: 'Ctrl+Shift+A', description: 'Deselect All Items' },
+    { category: 'Selection', keys: 'Ctrl+Click', description: 'Toggle Single Item Selection' },
+    { category: 'Selection', keys: 'Shift+Click', description: 'Select Range of Items' }
   ];
 
   const modal = document.createElement('div');
   modal.className = 'modal';
   modal.id = 'shortcuts-modal';
   modal.innerHTML = `
-    <div class="modal-content" style="max-width: 500px;">
+    <div class="modal-content" style="max-width: 700px;">
       <div class="modal-header">
         <h3>Keyboard Shortcuts</h3>
         <span class="modal-close">&times;</span>
       </div>
       <div class="shortcuts-content" style="padding: 1.5rem;">
-        ${shortcuts.map(shortcut => `
-          <div style="display: flex; justify-content: space-between; margin-bottom: 0.75rem; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary);">
-            <kbd style="background: var(--bg-primary); padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--border-color); font-family: monospace; font-weight: 600;">${shortcut.keys}</kbd>
-            <span style="flex: 1; margin-left: 1rem;">${shortcut.description}</span>
+        ${Object.entries(groupByCategory(shortcuts)).map(([category, categoryShortcuts]) => `
+          <div class="shortcut-category">
+            <h4 style="margin: 1.5rem 0 0.75rem 0; color: var(--text-primary); font-size: 1rem; font-weight: 600; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">${category}</h4>
+            ${categoryShortcuts.map(shortcut => `
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; padding: 0.5rem; border-radius: 6px; background: var(--bg-secondary); transition: background-color 0.2s;">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                  <kbd style="background: var(--bg-primary); padding: 0.25rem 0.5rem; border-radius: 4px; border: 1px solid var(--border-color); font-family: monospace; font-weight: 600; min-width: 80px; text-align: center;">${shortcut.keys}</kbd>
+                  <span style="flex: 1; color: var(--text-primary);">${shortcut.description}</span>
+                </div>
+              </div>
+            `).join('')}
           </div>
         `).join('')}
+      </div>
+      <div class="modal-footer" style="padding: 1rem 1.5rem; border-top: 1px solid var(--border-color); background: var(--bg-secondary);">
+        <p style="margin: 0; color: var(--text-secondary); font-size: 0.9rem;">
+          <strong>Note:</strong> Shortcuts are context-sensitive and may only work on specific screens or when certain conditions are met.
+        </p>
       </div>
     </div>
   `;
@@ -2058,6 +4072,25 @@ function showKeyboardShortcutsHelp() {
   modal.querySelector('.modal-close').addEventListener('click', () => {
     modal.remove();
   });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+// Helper function to group shortcuts by category
+function groupByCategory(shortcuts) {
+  return shortcuts.reduce((groups, shortcut) => {
+    const category = shortcut.category;
+    if (!groups[category]) {
+      groups[category] = [];
+    }
+    groups[category].push(shortcut);
+    return groups;
+  }, {});
 }
 
 function showDocumentation() {
@@ -2445,14 +4478,652 @@ function initializeSidebarState() {
 
 // Global functions for onclick handlers
 window.viewPatient = (id) => viewPatientDetails(id);
+window.switchScreen = switchScreen;
 window.editPatient = (id) => openPatientModal(id);
 window.deletePatient = (id) => deletePatientRecord(id);
-window.editAppointment = (id) => showError('Edit appointment not implemented yet');
-window.deleteAppointment = (id) => showError('Delete appointment not implemented yet');
-window.viewInvoice = (id) => showError('View invoice not implemented yet');
-window.editInvoice = (id) => showError('Edit invoice not implemented yet');
-window.editExpense = (id) => showError('Edit expense not implemented yet');
-window.deleteExpense = (id) => showError('Delete expense not implemented yet');
-window.editUser = (id) => showError('Edit user not implemented yet');
-window.deleteUser = (id) => showError('Delete user not implemented yet');
+window.editAppointment = (id) => editAppointment(id);
+window.updatePatientSelection = (patientId, selected) => updatePatientSelection(patientId, selected);
+window.deleteAppointment = async (id) => {
+  if (confirm('Are you sure you want to delete this appointment?')) {
+    try {
+      const result = await window.electronAPI.deleteAppointment(parseInt(id));
+      if (result && result.success) {
+        // Clear cache to ensure fresh data is loaded
+        clearExpiredCache();
+        // Force reload appointments list to show immediate changes
+        loadAppointments();
+        showSuccess('Appointment deleted successfully');
+      } else {
+        showError('Error deleting appointment: ' + (result?.error || 'Unknown error'));
+      }
+    } catch (error) {
+      showError('Error deleting appointment: ' + error.message);
+    }
+  }
+};
+window.createInvoiceFromAppointment = (id) => createInvoiceFromAppointment(id);
+async function viewInvoice(invoiceId) {
+  try {
+    const invoice = await window.electronAPI.getInvoiceWithDetails(invoiceId);
+    showInvoiceDetailsModal(invoice);
+  } catch (error) {
+    showError('Error loading invoice details: ' + error.message);
+  }
+}
+
+function showInvoiceDetailsModal(invoice) {
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'invoice-details-modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3>Invoice ${invoice.invoice_number}</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <div class="invoice-details-content" style="padding: 1.5rem;">
+        <div class="invoice-header-info" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 2rem; padding: 1rem; background: var(--bg-secondary); border-radius: 8px;">
+          <div>
+            <h4>Invoice Information</h4>
+            <p><strong>Invoice Number:</strong> ${invoice.invoice_number}</p>
+            <p><strong>Date:</strong> ${new Date(invoice.created_at).toLocaleDateString()}</p>
+            <p><strong>Due Date:</strong> ${new Date(invoice.due_date).toLocaleDateString()}</p>
+            <p><strong>Status:</strong> <span class="status-${invoice.status}">${invoice.status}</span></p>
+          </div>
+          <div>
+            <h4>Patient Information</h4>
+            <p><strong>Name:</strong> ${invoice.first_name} ${invoice.last_name}</p>
+            <p><strong>Patient ID:</strong> ${invoice.patient_id}</p>
+          </div>
+        </div>
+
+        <div class="invoice-items-section">
+          <h4>Invoice Items</h4>
+          <table class="data-table" style="width: 100%;">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Quantity</th>
+                <th>Unit Price</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${invoice.items.map(item => `
+                <tr>
+                  <td>${item.description}</td>
+                  <td>${item.quantity}</td>
+                  <td>$${item.unit_price.toFixed(2)}</td>
+                  <td>$${item.total_price.toFixed(2)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="invoice-totals" style="margin: 2rem 0; text-align: right;">
+          <div class="total-row">
+            <strong>Subtotal: $${invoice.amount.toFixed(2)}</strong>
+          </div>
+          <div class="total-row">
+            <strong>Tax (15%): $${invoice.tax_amount.toFixed(2)}</strong>
+          </div>
+          <div class="total-row">
+            <strong>Total: $${invoice.total_amount.toFixed(2)}</strong>
+          </div>
+        </div>
+
+        ${invoice.payments && invoice.payments.length > 0 ? `
+          <div class="invoice-payments-section">
+            <h4>Payment History</h4>
+            <table class="data-table" style="width: 100%;">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Amount</th>
+                  <th>Method</th>
+                  <th>Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${invoice.payments.map(payment => `
+                  <tr>
+                    <td>${new Date(payment.payment_date).toLocaleDateString()}</td>
+                    <td>$${payment.amount.toFixed(2)}</td>
+                    <td>${payment.payment_method}</td>
+                    <td>${payment.reference_number || ''}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
+
+        ${invoice.notes ? `
+          <div class="invoice-notes" style="margin-top: 2rem;">
+            <h4>Notes</h4>
+            <p>${invoice.notes}</p>
+          </div>
+        ` : ''}
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal('invoice-details-modal')">Close</button>
+        <button type="button" class="btn btn-primary" onclick="window.electronAPI.generateInvoicePDF(${invoice.id})">Download PDF</button>
+        <button type="button" class="btn btn-primary" onclick="editInvoice(${invoice.id})">Edit Invoice</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Also handle close button in form actions
+  const closeBtn = modal.querySelector('.form-actions .btn-secondary');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      modal.remove();
+    });
+  }
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+async function editInvoice(invoiceId) {
+  try {
+    const invoice = await window.electronAPI.getInvoiceWithDetails(invoiceId);
+    openEditInvoiceModal(invoice);
+  } catch (error) {
+    showError('Error loading invoice for editing: ' + error.message);
+  }
+}
+
+function openEditInvoiceModal(invoice) {
+  // Create modal HTML
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.id = 'edit-invoice-modal';
+  modal.innerHTML = `
+    <div class="modal-content" style="max-width: 800px;">
+      <div class="modal-header">
+        <h3>Edit Invoice ${invoice.invoice_number}</h3>
+        <span class="modal-close">&times;</span>
+      </div>
+      <form id="edit-invoice-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="edit-invoice-patient">Patient *</label>
+            <select id="edit-invoice-patient" name="patientId" required disabled>
+              <option value="">Select Patient</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="edit-invoice-due-date">Due Date *</label>
+            <input type="date" id="edit-invoice-due-date" name="dueDate" required
+                   value="${invoice.due_date.split('T')[0]}">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="edit-invoice-notes">Notes</label>
+          <textarea id="edit-invoice-notes" name="notes" rows="2" placeholder="Invoice notes">${invoice.notes || ''}</textarea>
+        </div>
+
+        <div class="invoice-items-section">
+          <h4>Invoice Items</h4>
+          <div id="edit-invoice-items">
+            <!-- Items will be populated here -->
+          </div>
+          <button type="button" id="edit-add-invoice-item" class="btn btn-secondary">Add Item</button>
+        </div>
+
+        <div class="invoice-totals">
+          <div class="total-row">
+            <strong>Subtotal: $<span id="edit-invoice-subtotal">0.00</span></strong>
+          </div>
+          <div class="total-row">
+            <strong>Tax (15%): $<span id="edit-invoice-tax">0.00</span></strong>
+          </div>
+          <div class="total-row">
+            <strong>Total: $<span id="edit-invoice-total">0.00</span></strong>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" onclick="closeModal('edit-invoice-modal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Update Invoice</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.classList.add('active');
+
+  // Load patients and billing codes
+  loadPatientsForEditInvoice(invoice);
+  loadBillingCodesForEditInvoice(invoice);
+
+  // Add form submit handler
+  modal.querySelector('#edit-invoice-form').addEventListener('submit', (e) => handleEditInvoiceSubmit(e, invoice.id));
+
+  // Add item management
+  setupEditInvoiceItemManagement(modal, invoice);
+
+  // Close modal functionality
+  modal.querySelector('.modal-close').addEventListener('click', () => {
+    modal.remove();
+  });
+
+  // Close modal when clicking outside content
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
+}
+
+async function loadPatientsForEditInvoice(invoice) {
+  try {
+    const patients = await window.electronAPI.getPatients();
+    const select = document.getElementById('edit-invoice-patient');
+
+    patients.forEach(patient => {
+      const option = document.createElement('option');
+      option.value = patient.id;
+      option.textContent = `${patient.patient_id} - ${patient.first_name} ${patient.last_name}`;
+      if (patient.id === invoice.patient_id) {
+        option.selected = true;
+      }
+      select.appendChild(option);
+    });
+  } catch (error) {
+    console.error('Error loading patients for edit invoice:', error);
+  }
+}
+
+async function loadBillingCodesForEditInvoice(invoice) {
+  try {
+    const billingCodes = await window.electronAPI.getBillingCodes({ active: true });
+    const selects = document.querySelectorAll('#edit-invoice-items select[name="billingCodeId"]');
+
+    selects.forEach(select => {
+      select.innerHTML = '<option value="">Select Billing Code</option>';
+      billingCodes.forEach(code => {
+        const option = document.createElement('option');
+        option.value = code.id;
+        option.textContent = `${code.code} - ${code.description} ($${code.default_price.toFixed(2)})`;
+        option.dataset.price = code.default_price;
+        option.dataset.taxRate = code.tax_rate;
+        select.appendChild(option);
+      });
+    });
+  } catch (error) {
+    console.error('Error loading billing codes for edit invoice:', error);
+  }
+}
+
+function setupEditInvoiceItemManagement(modal, invoice) {
+  const itemsContainer = modal.querySelector('#edit-invoice-items');
+  const addItemBtn = modal.querySelector('#edit-add-invoice-item');
+
+  // Populate existing items
+  invoice.items.forEach(item => {
+    const itemHtml = `
+      <div class="invoice-item" data-item-id="${item.id || Date.now()}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Billing Code *</label>
+            <select name="billingCodeId" required>
+              <option value="">Select Billing Code</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Quantity *</label>
+            <input type="number" name="quantity" min="1" value="${item.quantity}" required>
+          </div>
+          <div class="form-group">
+            <label>Unit Price *</label>
+            <input type="number" name="unitPrice" step="0.01" min="0" value="${item.unit_price}" required>
+          </div>
+          <div class="form-group">
+            <label>Total</label>
+            <input type="number" name="totalPrice" step="0.01" value="${item.total_price}" readonly>
+          </div>
+          <div class="form-group">
+            <button type="button" class="btn btn-danger btn-sm remove-item" style="margin-top: 24px;">Remove</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    itemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+  });
+
+  // Load billing codes and set selected values
+  loadBillingCodesForEditInvoice(invoice).then(() => {
+    invoice.items.forEach((item, index) => {
+      const itemElement = itemsContainer.children[index];
+      if (itemElement) {
+        const select = itemElement.querySelector('select[name="billingCodeId"]');
+        if (select && item.billing_code_id) {
+          select.value = item.billing_code_id;
+        }
+      }
+    });
+  });
+
+  addItemBtn.addEventListener('click', () => {
+    const itemCount = itemsContainer.children.length + 1;
+    const itemHtml = `
+      <div class="invoice-item" data-item-id="${Date.now()}">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Billing Code *</label>
+            <select name="billingCodeId" required>
+              <option value="">Select Billing Code</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Quantity *</label>
+            <input type="number" name="quantity" min="1" value="1" required>
+          </div>
+          <div class="form-group">
+            <label>Unit Price *</label>
+            <input type="number" name="unitPrice" step="0.01" min="0" required>
+          </div>
+          <div class="form-group">
+            <label>Total</label>
+            <input type="number" name="totalPrice" step="0.01" readonly>
+          </div>
+          <div class="form-group">
+            <button type="button" class="btn btn-danger btn-sm remove-item" style="margin-top: 24px;">Remove</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    itemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+
+    // Load billing codes for new item
+    loadBillingCodesForEditInvoice(invoice);
+
+    // Add event listeners for new item
+    const newItem = itemsContainer.lastElementChild;
+    setupEditItemEventListeners(newItem);
+  });
+
+  // Setup event listeners for existing items
+  itemsContainer.querySelectorAll('.invoice-item').forEach(setupEditItemEventListeners);
+
+  function setupEditItemEventListeners(item) {
+    const billingCodeSelect = item.querySelector('select[name="billingCodeId"]');
+    const quantityInput = item.querySelector('input[name="quantity"]');
+    const unitPriceInput = item.querySelector('input[name="unitPrice"]');
+    const totalInput = item.querySelector('input[name="totalPrice"]');
+    const removeBtn = item.querySelector('.remove-item');
+
+    billingCodeSelect.addEventListener('change', (e) => {
+      const selectedOption = e.target.selectedOptions[0];
+      if (selectedOption && selectedOption.dataset.price) {
+        unitPriceInput.value = selectedOption.dataset.price;
+        calculateEditItemTotal(item);
+      }
+    });
+
+    quantityInput.addEventListener('input', () => calculateEditItemTotal(item));
+    unitPriceInput.addEventListener('input', () => calculateEditItemTotal(item));
+
+    removeBtn.addEventListener('click', () => {
+      if (itemsContainer.children.length > 1) {
+        item.remove();
+        calculateEditInvoiceTotals();
+      } else {
+        showError('Invoice must have at least one item');
+      }
+    });
+  }
+
+  function calculateEditItemTotal(item) {
+    const quantity = parseFloat(item.querySelector('input[name="quantity"]').value) || 0;
+    const unitPrice = parseFloat(item.querySelector('input[name="unitPrice"]').value) || 0;
+    const total = quantity * unitPrice;
+    item.querySelector('input[name="totalPrice"]').value = total.toFixed(2);
+    calculateEditInvoiceTotals();
+  }
+
+  // Calculate initial totals
+  calculateEditInvoiceTotals();
+}
+
+function calculateEditInvoiceTotals() {
+  const items = document.querySelectorAll('#edit-invoice-items .invoice-item');
+  let subtotal = 0;
+
+  items.forEach(item => {
+    const total = parseFloat(item.querySelector('input[name="totalPrice"]').value) || 0;
+    subtotal += total;
+  });
+
+  const tax = subtotal * 0.15;
+  const total = subtotal + tax;
+
+  document.getElementById('edit-invoice-subtotal').textContent = subtotal.toFixed(2);
+  document.getElementById('edit-invoice-tax').textContent = tax.toFixed(2);
+  document.getElementById('edit-invoice-total').textContent = total.toFixed(2);
+}
+
+async function handleEditInvoiceSubmit(e, invoiceId) {
+  e.preventDefault();
+
+  const formData = new FormData(e.target);
+  const items = [];
+
+  // Collect invoice items
+  document.querySelectorAll('#edit-invoice-items .invoice-item').forEach(item => {
+    const billingCodeSelect = item.querySelector('select[name="billingCodeId"]');
+    const billingCodeId = billingCodeSelect.value;
+    const quantity = parseInt(item.querySelector('input[name="quantity"]').value);
+    const unitPrice = parseFloat(item.querySelector('input[name="unitPrice"]').value);
+    const totalPrice = parseFloat(item.querySelector('input[name="totalPrice"]').value);
+
+    if (billingCodeId && quantity && unitPrice) {
+      const selectedOption = billingCodeSelect.selectedOptions[0];
+      const description = selectedOption ? selectedOption.textContent.split(' - ')[1].split(' (')[0] : 'Service';
+
+      items.push({
+        billingCodeId: parseInt(billingCodeId),
+        description: description,
+        quantity: quantity,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice
+      });
+    }
+  });
+
+  if (items.length === 0) {
+    showError('Invoice must have at least one item');
+    return;
+  }
+
+  const invoiceData = {
+    patientId: parseInt(formData.get('patientId')),
+    amount: parseFloat(document.getElementById('edit-invoice-subtotal').textContent),
+    taxAmount: parseFloat(document.getElementById('edit-invoice-tax').textContent),
+    totalAmount: parseFloat(document.getElementById('edit-invoice-total').textContent),
+    dueDate: formData.get('dueDate'),
+    notes: formData.get('notes'),
+    items: items
+  };
+
+  try {
+    await window.electronAPI.updateInvoice(invoiceId, invoiceData);
+    showSuccess('Invoice updated successfully');
+    closeModal('edit-invoice-modal');
+    loadInvoices();
+  } catch (error) {
+    showError('Error updating invoice: ' + error.message);
+  }
+}
+
+window.viewInvoice = (id) => viewInvoice(id);
+window.editInvoice = (id) => editInvoice(id);
+window.editBillingCode = (id) => openBillingCodeModal(id);
+window.deleteBillingCode = async (id) => {
+  if (!confirm('Are you sure you want to delete this billing code?')) {
+    return;
+  }
+  
+  try {
+    const result = await window.electronAPI.deleteBillingCode(id);
+    if (result && result.success) {
+      showSuccess('Billing code deleted successfully');
+      loadBillingCodes();
+    } else {
+      showError('Error deleting billing code: ' + (result?.error || 'Unknown error'));
+    }
+  } catch (error) {
+    showError('Error deleting billing code: ' + error.message);
+  }
+};
+window.editExpense = (id) => openExpenseModal(id);
+window.deleteExpense = async (id) => {
+  if (!confirm('Are you sure you want to delete this expense?')) {
+    return;
+  }
+  
+  try {
+    const result = await window.electronAPI.deleteExpense(id);
+    if (result && result.success) {
+      showSuccess('Expense deleted successfully');
+      loadExpenses();
+      loadFinancialReports(); // Refresh financial stats
+    } else {
+      showError('Error deleting expense: ' + (result?.error || 'Unknown error'));
+    }
+  } catch (error) {
+    showError('Error deleting expense: ' + error.message);
+  }
+};
+window.editUser = (id) => window.openUserModal(id);
+window.deleteUser = async (id) => {
+  if (!confirm('Are you sure you want to delete this user?')) {
+    return;
+  }
+  
+  try {
+    const result = await window.electronAPI.deleteUser(id);
+    if (result && result.success) {
+      showSuccess('User deleted successfully');
+      loadUsers();
+    } else {
+      showError('Error deleting user: ' + (result?.error || 'Unknown error'));
+    }
+  } catch (error) {
+    showError('Error deleting user: ' + error.message);
+  }
+};
 window.removeFilter = (key) => removeFilter(key);
+window.startTour = startTour;
+window.nextTourStep = nextTourStep;
+window.endTour = endTour;
+window.showKeyboardShortcutsHelp = showKeyboardShortcutsHelp;
+
+// Sync settings functions
+async function loadSyncSettings() {
+  try {
+    const credentials = await window.electronAPI.invoke('sync:loadCredentials');
+    if (credentials) {
+      document.getElementById('db-host').value = credentials.host || '';
+      document.getElementById('db-port').value = credentials.port || '5432';
+      document.getElementById('db-name').value = credentials.database || '';
+      document.getElementById('db-user').value = credentials.user || '';
+      document.getElementById('ssl-enabled').checked = credentials.ssl !== false;
+    }
+  } catch (error) {
+    console.error('Failed to load sync settings:', error);
+  }
+}
+
+async function saveSyncSettings(credentials) {
+  try {
+    await window.electronAPI.invoke('sync:saveCredentials', credentials);
+    showSuccess('Sync settings saved successfully!');
+  } catch (error) {
+    showError('Failed to save settings: ' + error.message);
+  }
+}
+
+async function testConnection(credentials) {
+  try {
+    const result = await window.electronAPI.invoke('sync:testConnection', credentials);
+    if (result.success) {
+      showSuccess('Connection successful!');
+    } else {
+      showError('Connection failed: ' + result.error);
+    }
+  } catch (error) {
+    showError('Test failed: ' + error.message);
+  }
+}
+
+// Initialize sync settings when admin tab is activated
+document.addEventListener('DOMContentLoaded', () => {
+  // ... existing code ...
+
+  // Add sync settings event listeners
+  const syncForm = document.getElementById('sync-form');
+  if (syncForm) {
+    syncForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const credentials = {
+        host: document.getElementById('db-host').value,
+        port: parseInt(document.getElementById('db-port').value),
+        database: document.getElementById('db-name').value,
+        user: document.getElementById('db-user').value,
+        password: document.getElementById('db-password').value,
+        ssl: document.getElementById('ssl-enabled').checked
+      };
+
+      await saveSyncSettings(credentials);
+    });
+
+    const testBtn = document.getElementById('test-connection');
+    if (testBtn) {
+      testBtn.addEventListener('click', async () => {
+        const credentials = {
+          host: document.getElementById('db-host').value,
+          port: parseInt(document.getElementById('db-port').value),
+          database: document.getElementById('db-name').value,
+          user: document.getElementById('db-user').value,
+          password: document.getElementById('db-password').value,
+          ssl: document.getElementById('ssl-enabled').checked
+        };
+
+        await testConnection(credentials);
+      });
+    }
+  }
+
+  // Load sync settings when admin screen is shown
+  const adminTabObserver = new MutationObserver(() => {
+    if (document.getElementById('admin-screen').classList.contains('active') &&
+        document.getElementById('sync-tab').classList.contains('active')) {
+      loadSyncSettings();
+    }
+  });
+
+  adminTabObserver.observe(document.getElementById('admin-screen'), {
+    attributes: true,
+    attributeFilter: ['class']
+  });
+});
